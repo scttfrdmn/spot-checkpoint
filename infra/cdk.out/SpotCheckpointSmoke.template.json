@@ -1,0 +1,487 @@
+{
+ "Description": "spot-checkpoint FIS smoke-test stack (issue #17)",
+ "Resources": {
+  "CheckpointBucketDFE4871A": {
+   "Type": "AWS::S3::Bucket",
+   "Properties": {
+    "BucketEncryption": {
+     "ServerSideEncryptionConfiguration": [
+      {
+       "ServerSideEncryptionByDefault": {
+        "SSEAlgorithm": "AES256"
+       }
+      }
+     ]
+    },
+    "LifecycleConfiguration": {
+     "Rules": [
+      {
+       "ExpirationInDays": 7,
+       "Id": "expire-old-checkpoints",
+       "NoncurrentVersionExpiration": {
+        "NoncurrentDays": 1
+       },
+       "Status": "Enabled"
+      }
+     ]
+    },
+    "PublicAccessBlockConfiguration": {
+     "BlockPublicAcls": true,
+     "BlockPublicPolicy": true,
+     "IgnorePublicAcls": true,
+     "RestrictPublicBuckets": true
+    },
+    "Tags": [
+     {
+      "Key": "aws-cdk:auto-delete-objects",
+      "Value": "true"
+     }
+    ],
+    "VersioningConfiguration": {
+     "Status": "Enabled"
+    }
+   },
+   "UpdateReplacePolicy": "Delete",
+   "DeletionPolicy": "Delete",
+   "Metadata": {
+    "aws:cdk:path": "SpotCheckpointSmoke/CheckpointBucket/Resource"
+   }
+  },
+  "CheckpointBucketPolicyB1665717": {
+   "Type": "AWS::S3::BucketPolicy",
+   "Properties": {
+    "Bucket": {
+     "Ref": "CheckpointBucketDFE4871A"
+    },
+    "PolicyDocument": {
+     "Statement": [
+      {
+       "Action": [
+        "s3:PutBucketPolicy",
+        "s3:GetBucket*",
+        "s3:List*",
+        "s3:DeleteObject*"
+       ],
+       "Effect": "Allow",
+       "Principal": {
+        "AWS": {
+         "Fn::GetAtt": [
+          "CustomS3AutoDeleteObjectsCustomResourceProviderRole3B1BD092",
+          "Arn"
+         ]
+        }
+       },
+       "Resource": [
+        {
+         "Fn::GetAtt": [
+          "CheckpointBucketDFE4871A",
+          "Arn"
+         ]
+        },
+        {
+         "Fn::Join": [
+          "",
+          [
+           {
+            "Fn::GetAtt": [
+             "CheckpointBucketDFE4871A",
+             "Arn"
+            ]
+           },
+           "/*"
+          ]
+         ]
+        }
+       ]
+      }
+     ],
+     "Version": "2012-10-17"
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "SpotCheckpointSmoke/CheckpointBucket/Policy/Resource"
+   }
+  },
+  "CheckpointBucketAutoDeleteObjectsCustomResource2554BF32": {
+   "Type": "Custom::S3AutoDeleteObjects",
+   "Properties": {
+    "ServiceToken": {
+     "Fn::GetAtt": [
+      "CustomS3AutoDeleteObjectsCustomResourceProviderHandler9D90184F",
+      "Arn"
+     ]
+    },
+    "BucketName": {
+     "Ref": "CheckpointBucketDFE4871A"
+    }
+   },
+   "DependsOn": [
+    "CheckpointBucketPolicyB1665717"
+   ],
+   "UpdateReplacePolicy": "Delete",
+   "DeletionPolicy": "Delete",
+   "Metadata": {
+    "aws:cdk:path": "SpotCheckpointSmoke/CheckpointBucket/AutoDeleteObjectsCustomResource/Default"
+   }
+  },
+  "CustomS3AutoDeleteObjectsCustomResourceProviderRole3B1BD092": {
+   "Type": "AWS::IAM::Role",
+   "Properties": {
+    "AssumeRolePolicyDocument": {
+     "Version": "2012-10-17",
+     "Statement": [
+      {
+       "Action": "sts:AssumeRole",
+       "Effect": "Allow",
+       "Principal": {
+        "Service": "lambda.amazonaws.com"
+       }
+      }
+     ]
+    },
+    "ManagedPolicyArns": [
+     {
+      "Fn::Sub": "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "SpotCheckpointSmoke/Custom::S3AutoDeleteObjectsCustomResourceProvider/Role"
+   }
+  },
+  "CustomS3AutoDeleteObjectsCustomResourceProviderHandler9D90184F": {
+   "Type": "AWS::Lambda::Function",
+   "Properties": {
+    "Code": {
+     "S3Bucket": "cdk-hnb659fds-assets-123456789012-us-east-1",
+     "S3Key": "faa95a81ae7d7373f3e1f242268f904eb748d8d0fdd306e8a6fe515a1905a7d6.zip"
+    },
+    "Timeout": 900,
+    "MemorySize": 128,
+    "Handler": "index.handler",
+    "Role": {
+     "Fn::GetAtt": [
+      "CustomS3AutoDeleteObjectsCustomResourceProviderRole3B1BD092",
+      "Arn"
+     ]
+    },
+    "Runtime": "nodejs22.x",
+    "Description": {
+     "Fn::Join": [
+      "",
+      [
+       "Lambda function for auto-deleting objects in ",
+       {
+        "Ref": "CheckpointBucketDFE4871A"
+       },
+       " S3 bucket."
+      ]
+     ]
+    }
+   },
+   "DependsOn": [
+    "CustomS3AutoDeleteObjectsCustomResourceProviderRole3B1BD092"
+   ],
+   "Metadata": {
+    "aws:cdk:path": "SpotCheckpointSmoke/Custom::S3AutoDeleteObjectsCustomResourceProvider/Handler",
+    "aws:asset:path": "asset.faa95a81ae7d7373f3e1f242268f904eb748d8d0fdd306e8a6fe515a1905a7d6",
+    "aws:asset:property": "Code"
+   }
+  },
+  "InstanceRole3CCE2F1D": {
+   "Type": "AWS::IAM::Role",
+   "Properties": {
+    "AssumeRolePolicyDocument": {
+     "Statement": [
+      {
+       "Action": "sts:AssumeRole",
+       "Effect": "Allow",
+       "Principal": {
+        "Service": "ec2.amazonaws.com"
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "Description": "spot-checkpoint smoke-test instance role",
+    "ManagedPolicyArns": [
+     {
+      "Fn::Join": [
+       "",
+       [
+        "arn:",
+        {
+         "Ref": "AWS::Partition"
+        },
+        ":iam::aws:policy/AmazonSSMManagedInstanceCore"
+       ]
+      ]
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "SpotCheckpointSmoke/InstanceRole/Resource"
+   }
+  },
+  "InstanceRoleDefaultPolicy1531605C": {
+   "Type": "AWS::IAM::Policy",
+   "Properties": {
+    "PolicyDocument": {
+     "Statement": [
+      {
+       "Action": [
+        "s3:GetObject*",
+        "s3:GetBucket*",
+        "s3:List*",
+        "s3:DeleteObject*",
+        "s3:PutObject",
+        "s3:PutObjectLegalHold",
+        "s3:PutObjectRetention",
+        "s3:PutObjectTagging",
+        "s3:PutObjectVersionTagging",
+        "s3:Abort*"
+       ],
+       "Effect": "Allow",
+       "Resource": [
+        {
+         "Fn::GetAtt": [
+          "CheckpointBucketDFE4871A",
+          "Arn"
+         ]
+        },
+        {
+         "Fn::Join": [
+          "",
+          [
+           {
+            "Fn::GetAtt": [
+             "CheckpointBucketDFE4871A",
+             "Arn"
+            ]
+           },
+           "/*"
+          ]
+         ]
+        }
+       ]
+      },
+      {
+       "Action": "s3:DeleteObject*",
+       "Effect": "Allow",
+       "Resource": {
+        "Fn::Join": [
+         "",
+         [
+          {
+           "Fn::GetAtt": [
+            "CheckpointBucketDFE4871A",
+            "Arn"
+           ]
+          },
+          "/*"
+         ]
+        ]
+       }
+      },
+      {
+       "Action": [
+        "ec2:DescribeInstances",
+        "ec2:CreateTags"
+       ],
+       "Effect": "Allow",
+       "Resource": "*",
+       "Sid": "EC2SelfManage"
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "PolicyName": "InstanceRoleDefaultPolicy1531605C",
+    "Roles": [
+     {
+      "Ref": "InstanceRole3CCE2F1D"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "SpotCheckpointSmoke/InstanceRole/DefaultPolicy/Resource"
+   }
+  },
+  "InstanceProfile": {
+   "Type": "AWS::IAM::InstanceProfile",
+   "Properties": {
+    "Roles": [
+     {
+      "Ref": "InstanceRole3CCE2F1D"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "SpotCheckpointSmoke/InstanceProfile"
+   }
+  },
+  "LaunchTemplateProfile94AA77CE": {
+   "Type": "AWS::IAM::InstanceProfile",
+   "Properties": {
+    "Roles": [
+     {
+      "Ref": "InstanceRole3CCE2F1D"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "SpotCheckpointSmoke/LaunchTemplate/Profile"
+   }
+  },
+  "LaunchTemplate04EC5460": {
+   "Type": "AWS::EC2::LaunchTemplate",
+   "Properties": {
+    "LaunchTemplateData": {
+     "IamInstanceProfile": {
+      "Arn": {
+       "Fn::GetAtt": [
+        "LaunchTemplateProfile94AA77CE",
+        "Arn"
+       ]
+      }
+     },
+     "ImageId": {
+      "Ref": "SsmParameterValueawsserviceamiamazonlinuxlatestal2023amikerneldefaultx8664C96584B6F00A464EAD1953AFF4B05118Parameter"
+     },
+     "InstanceMarketOptions": {
+      "MarketType": "spot",
+      "SpotOptions": {
+       "SpotInstanceType": "one-time"
+      }
+     },
+     "InstanceType": "c5.large",
+     "MetadataOptions": {
+      "HttpTokens": "required"
+     },
+     "TagSpecifications": [
+      {
+       "ResourceType": "instance",
+       "Tags": [
+        {
+         "Key": "Name",
+         "Value": "SpotCheckpointSmoke/LaunchTemplate"
+        }
+       ]
+      },
+      {
+       "ResourceType": "volume",
+       "Tags": [
+        {
+         "Key": "Name",
+         "Value": "SpotCheckpointSmoke/LaunchTemplate"
+        }
+       ]
+      }
+     ],
+     "UserData": {
+      "Fn::Base64": {
+       "Fn::Join": [
+        "",
+        [
+         "#!/bin/bash\n                #!/bin/bash\n                set -euxo pipefail\n                exec > >(tee /var/log/spot-checkpoint-smoke.log) 2>&1\n\n                # ---- Tag this instance so FIS can target it ----\n                INSTANCE_ID=$(TOKEN=$(curl -s -X PUT \"http://169.254.169.254/latest/api/token\" \\\n                    -H \"X-aws-ec2-metadata-token-ttl-seconds: 21600\") && \\\n                    curl -s -H \"X-aws-ec2-metadata-token: $TOKEN\" \\\n                    http://169.254.169.254/latest/meta-data/instance-id)\n                REGION=$(TOKEN=$(curl -s -X PUT \"http://169.254.169.254/latest/api/token\" \\\n                    -H \"X-aws-ec2-metadata-token-ttl-seconds: 21600\") && \\\n                    curl -s -H \"X-aws-ec2-metadata-token: $TOKEN\" \\\n                    http://169.254.169.254/latest/meta-data/placement/region)\n                aws ec2 create-tags --region \"$REGION\" --resources \"$INSTANCE_ID\" \\\n                    --tags Key=spot-checkpoint-smoke-test,Value=true\n\n                # ---- Install dependencies ----\n                dnf install -y python3.11 python3.11-pip git\n                pip3.11 install --quiet \"spot-checkpoint[cli]\"\n\n                # ---- Write benchmark script ----\n                cat > /root/run_benchmark.py << 'PYSCRIPT'\n                \"\"\"\nSmoke-test benchmark: fake iterative solver with spot-checkpoint.\n\nRuns 200 iterations of a trivial computation, checkpointing every 30 s.\nOn spot interruption DirectEC2Backend fires an emergency checkpoint and\nthe instance exits cleanly.  After restart the manager restores from the\nlatest checkpoint and resumes from where it left off.\n\"\"\"\nimport asyncio\nimport logging\nimport time\n\nimport numpy as np\n\nfrom spot_checkpoint.lifecycle import SpotLifecycleManager, detect_backend\nfrom spot_checkpoint.protocol import Checkpointable, CheckpointPayload\nfrom spot_checkpoint.storage import S3ShardedStore\n\nlogging.basicConfig(level=logging.INFO, format=\"%(asctime)s %(levelname)s %(message)s\")\nlog = logging.getLogger(\"smoke\")\n\nBUCKET = \"",
+         {
+          "Ref": "CheckpointBucketDFE4871A"
+         },
+         "\"\nJOB_ID = \"smoke-test\"\nTOTAL_ITERS = 60\nITER_SLEEP = 0.5   # seconds per iteration — short for CI speed\n\n\nclass FakeSolver:\n    \"\"\"Trivial iterative solver that accumulates a sum.\"\"\"\n\n    def __init__(self) -> None:\n        self.iteration = 0\n        self.value = np.zeros(1024, dtype=np.float64)   # 8 kB state\n\n    def step(self) -> None:\n        self.value += np.random.default_rng(self.iteration).random(1024)\n        self.iteration += 1\n\n\nclass FakeSolverAdapter(Checkpointable):\n    def __init__(self, solver: FakeSolver) -> None:\n        self._solver = solver\n\n    def checkpoint_state(self) -> CheckpointPayload:\n        return CheckpointPayload(\n            tensors={\"value\": self._solver.value.copy()},\n            metadata={\"iteration\": self._solver.iteration},\n            method=\"fake-solver\",\n            timestamp=time.time(),\n        )\n\n    def restore_state(self, payload: CheckpointPayload) -> None:\n        self._solver.value = payload.tensors[\"value\"].copy()\n        self._solver.iteration = int(payload.metadata.get(\"iteration\", 0))\n        log.info(\"Restored from iteration %d\", self._solver.iteration)\n\n\ndef main() -> None:\n    solver = FakeSolver()\n    adapter = FakeSolverAdapter(solver)\n    store = S3ShardedStore(bucket=BUCKET, job_id=JOB_ID)\n    backend = detect_backend()\n    mgr = SpotLifecycleManager(\n        store=store,\n        adapter=adapter,\n        backend=backend,\n        periodic_interval=15.0,   # short for CI — ensures checkpoint before FIS fires\n        checkpoint_id_prefix=JOB_ID,\n    )\n\n    # Attempt restore from previous run\n    asyncio.run(mgr.restore_latest())\n\n    with mgr:\n        start_iter = solver.iteration\n        log.info(\"Starting from iteration %d / %d\", start_iter, TOTAL_ITERS)\n\n        for i in range(start_iter, TOTAL_ITERS):\n            solver.step()\n            mgr.check(i)\n            time.sleep(ITER_SLEEP)\n\n        log.info(\"Benchmark complete — final value norm: %.6f\",\n                 float(np.linalg.norm(solver.value)))\n\n        # Write completion marker so CI workflow can verify successful restore\n        import json as _json\n        import subprocess as _sp\n        marker = _json.dumps({\n            \"status\": \"completed\",\n            \"completed_at\": time.time(),\n            \"total_iterations\": TOTAL_ITERS,\n            \"restored_from_iteration\": start_iter,\n        })\n        _sp.run(\n            [\"aws\", \"s3\", \"cp\", \"-\",\n             f\"s3://{BUCKET}/{JOB_ID}/completion-marker.json\"],\n            input=marker.encode(),\n            check=True,\n        )\n        log.info(\"Wrote completion marker to S3\")\n\n\nif __name__ == \"__main__\":\n    main()\n\n                PYSCRIPT\n\n                # ---- Run (foreground so the instance stays alive under FIS) ----\n                python3.11 /root/run_benchmark.py\n"
+        ]
+       ]
+      }
+     }
+    },
+    "LaunchTemplateName": "spot-checkpoint-smoke",
+    "TagSpecifications": [
+     {
+      "ResourceType": "launch-template",
+      "Tags": [
+       {
+        "Key": "Name",
+        "Value": "SpotCheckpointSmoke/LaunchTemplate"
+       }
+      ]
+     }
+    ]
+   },
+   "DependsOn": [
+    "InstanceRoleDefaultPolicy1531605C",
+    "InstanceRole3CCE2F1D"
+   ],
+   "Metadata": {
+    "aws:cdk:path": "SpotCheckpointSmoke/LaunchTemplate/Resource"
+   }
+  },
+  "CDKMetadata": {
+   "Type": "AWS::CDK::Metadata",
+   "Properties": {
+    "Analytics": "v2:deflate64:H4sIAAAAAAAA/1VPy27CQAz8Fu4blyb8QOGEVKlRyh25i4El+0BrLwit9t+bJlVTTjOesWbsGurVEpYLvHOlD31lzRfkT0Hdq0HaZ24gr5PuSdTm6H/ZBG2wRj9meZqLMuggd8HSjzXivDmzrWdBr6mN4WgsFUW6hvyOyevzjtzVoowBz0opapNYguuIQ4p66vjjT9aQfDMHimtkUm/MJMNfJ+NP4yEY0ZFQVP+TPpJckxTVPuQc/EsDrytoFhc2porJi3EE3YTftoG4EjgBAAA="
+   },
+   "Metadata": {
+    "aws:cdk:path": "SpotCheckpointSmoke/CDKMetadata/Default"
+   }
+  }
+ },
+ "Parameters": {
+  "SsmParameterValueawsserviceamiamazonlinuxlatestal2023amikerneldefaultx8664C96584B6F00A464EAD1953AFF4B05118Parameter": {
+   "Type": "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>",
+   "Default": "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
+  },
+  "BootstrapVersion": {
+   "Type": "AWS::SSM::Parameter::Value<String>",
+   "Default": "/cdk-bootstrap/hnb659fds/version",
+   "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]"
+  }
+ },
+ "Outputs": {
+  "BucketName": {
+   "Description": "Checkpoint S3 bucket",
+   "Value": {
+    "Ref": "CheckpointBucketDFE4871A"
+   }
+  },
+  "LaunchTemplateId": {
+   "Description": "Launch template ID for manual launch / FIS target",
+   "Value": {
+    "Ref": "LaunchTemplate04EC5460"
+   }
+  },
+  "InstanceProfileArn": {
+   "Description": "IAM instance profile ARN",
+   "Value": {
+    "Fn::GetAtt": [
+     "InstanceProfile",
+     "Arn"
+    ]
+   }
+  }
+ },
+ "Rules": {
+  "CheckBootstrapVersion": {
+   "Assertions": [
+    {
+     "Assert": {
+      "Fn::Not": [
+       {
+        "Fn::Contains": [
+         [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5"
+         ],
+         {
+          "Ref": "BootstrapVersion"
+         }
+        ]
+       }
+      ]
+     },
+     "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI."
+    }
+   ]
+  }
+ }
+}

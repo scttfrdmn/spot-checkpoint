@@ -1,0 +1,44 @@
+{
+  "description": "Send a spot interruption notice to instances running the spot-checkpoint smoke test, then terminate them after 2 minutes.",
+  "targets": {
+    "smokeInstances": {
+      "resourceType": "aws:ec2:spot-instance",
+      "resourceTags": {
+        "spot-checkpoint-smoke-test": "true"
+      },
+      "selectionMode": "ALL"
+    }
+  },
+  "actions": {
+    "interruptSpotInstances": {
+      "actionId": "aws:ec2:send-spot-instance-interruptions",
+      "description": "Send a 2-minute interruption notice to all smoke-test instances",
+      "parameters": {
+        "durationBeforeInterruption": "PT2M"
+      },
+      "targets": {
+        "SpotInstances": "smokeInstances"
+      }
+    }
+  },
+  "stopConditions": [
+    {
+      "source": "none"
+    }
+  ],
+  "roleArn": "<REPLACE: arn:aws:iam::ACCOUNT_ID:role/FISRole>",
+  "tags": {
+    "spot-checkpoint-smoke-test": "true",
+    "ManagedBy": "spot-checkpoint-infra"
+  },
+  "logConfiguration": {
+    "cloudWatchLogsConfiguration": {
+      "logGroupArn": "<REPLACE: arn:aws:logs:REGION:ACCOUNT_ID:log-group:/fis/spot-checkpoint:*>"
+    },
+    "logSchemaVersion": 2
+  },
+  "experimentOptions": {
+    "accountTargeting": "single-account",
+    "emptyTargetResolutionMode": "fail"
+  }
+}

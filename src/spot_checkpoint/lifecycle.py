@@ -20,14 +20,17 @@ import signal
 import threading
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Optional, TypeVar
 
-from spot_checkpoint.protocol import CheckpointPayload, CheckpointStore, Checkpointable
+from spot_checkpoint.protocol import Checkpointable, CheckpointPayload, CheckpointStore
 
 logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
 
 
 # ---------------------------------------------------------------------------
@@ -286,10 +289,17 @@ class DirectEC2Backend(LifecycleBackend):
 
     Fallback for people who launch raw spot instances without
     spore.host or a scheduler.
+
+    Uses IMDSv2 (token-based auth) with a 6-hour token TTL.  Falls back
+    to IMDSv1 (no token) if the PUT request fails, so it still works on
+    older instances or environments where the IMDS endpoint is simulated.
     """
 
     METADATA_URL = "http://169.254.169.254/latest/meta-data/spot/instance-action"
     TOKEN_URL = "http://169.254.169.254/latest/api/token"
+
+    _TOKEN_TTL_SECONDS = 21600      # 6-hour token TTL requested from IMDS
+    _TOKEN_REFRESH_MARGIN = 60      # Refresh token this many seconds before expiry
 
     def __init__(
         self,
@@ -301,6 +311,8 @@ class DirectEC2Backend(LifecycleBackend):
         self._on_interrupt: Optional[Callable[[InterruptEvent], None]] = None
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        self._imds_token: Optional[str] = None
+        self._token_expiry: float = 0.0
 
     def start(self, on_interrupt: Callable[[InterruptEvent], None]) -> None:
         self._on_interrupt = on_interrupt
@@ -323,28 +335,49 @@ class DirectEC2Backend(LifecycleBackend):
         signal.signal(signal.SIGUSR1, signal.SIG_DFL)
 
     def _get_imds_token(self) -> Optional[str]:
-        """Get IMDSv2 token."""
+        """Request a fresh IMDSv2 session token from the metadata service.
+
+        Returns:
+            The token string, or None if the PUT request fails (IMDSv1 fallback).
+        """
         import urllib.request
         try:
             req = urllib.request.Request(
                 self.TOKEN_URL,
                 method="PUT",
-                headers={"X-aws-ec2-metadata-token-ttl-seconds": "300"},
+                headers={"X-aws-ec2-metadata-token-ttl-seconds": str(self._TOKEN_TTL_SECONDS)},
             )
             with urllib.request.urlopen(req, timeout=2) as resp:
-                return resp.read().decode()
-        except Exception:
+                token: str = resp.read().decode()
+                logger.debug("IMDSv2 token acquired (TTL=%ds)", self._TOKEN_TTL_SECONDS)
+                return token
+        except Exception as exc:
+            logger.debug("IMDSv2 token request failed (%s) — falling back to IMDSv1", exc)
             return None
+
+    def _maybe_refresh_token(self) -> None:
+        """Refresh the cached IMDSv2 token if it is missing or close to expiry."""
+        if time.time() + self._TOKEN_REFRESH_MARGIN < self._token_expiry:
+            return  # Token still valid
+        token = self._get_imds_token()
+        if token is not None:
+            self._imds_token = token
+            self._token_expiry = time.time() + self._TOKEN_TTL_SECONDS
+        else:
+            # Clear cached token so we fall back to IMDSv1 on this cycle
+            self._imds_token = None
+            self._token_expiry = 0.0
 
     def _poll_loop(self) -> None:
         import urllib.request
-        token = self._get_imds_token()
+        self._maybe_refresh_token()
 
         while not self._stop_event.is_set():
+            self._maybe_refresh_token()
             try:
                 headers: dict[str, str] = {}
-                if token:
-                    headers["X-aws-ec2-metadata-token"] = token
+                if self._imds_token:
+                    headers["X-aws-ec2-metadata-token"] = self._imds_token
 
                 req = urllib.request.Request(self.METADATA_URL, headers=headers)
                 with urllib.request.urlopen(req, timeout=2) as resp:
@@ -453,6 +486,7 @@ class SpotLifecycleManager:
         self._checkpoint_count = 0
         self._lock = threading.Lock()
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._loop_thread: Optional[threading.Thread] = None
 
     def __enter__(self) -> SpotLifecycleManager:
         self.start()
@@ -463,6 +497,12 @@ class SpotLifecycleManager:
 
     def start(self) -> None:
         self._loop = asyncio.new_event_loop()
+        self._loop_thread = threading.Thread(
+            target=self._loop.run_forever,
+            daemon=True,
+            name="spot-checkpoint-loop",
+        )
+        self._loop_thread.start()
         self.backend.start(on_interrupt=self._on_interrupt)
         self._last_checkpoint_time = time.time()
         logger.info(
@@ -473,12 +513,35 @@ class SpotLifecycleManager:
 
     def stop(self) -> None:
         self.backend.stop()
-        if self._loop:
+        if self._loop is not None and self._loop_thread is not None:
+            self._loop.call_soon_threadsafe(self._loop.stop)
+            self._loop_thread.join(timeout=30.0)
             self._loop.close()
+            self._loop_thread = None
+        elif self._loop is not None:
+            self._loop.close()
+        self._loop = None
         logger.info(
             "SpotLifecycleManager stopped — %d checkpoints written",
             self._checkpoint_count,
         )
+
+    def _run_async(self, coro: Coroutine[Any, Any, T]) -> T:
+        """Submit a coroutine to the background event loop and block until complete.
+
+        Safe to call from both sync code and from within a running async context.
+
+        Args:
+            coro: Coroutine to execute on the background event loop.
+
+        Returns:
+            The return value of the coroutine.
+        """
+        assert self._loop is not None and self._loop.is_running(), (
+            "_run_async called before start() or after stop()"
+        )
+        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        return future.result()
 
     def make_callback(self) -> Callable[[dict[str, Any]], None]:
         """Returns a PySCF-compatible callback function."""
@@ -511,13 +574,12 @@ class SpotLifecycleManager:
             self._do_periodic_checkpoint(iteration)
 
     def _do_periodic_checkpoint(self, iteration: int) -> None:
-        assert self._loop is not None
         payload = self.adapter.checkpoint_state()
         ckpt_id = f"{self.checkpoint_id_prefix}-{payload.method}-iter{iteration:06d}"
 
         logger.info("Periodic checkpoint: %s (%.1f MB)", ckpt_id, payload.total_bytes / 1e6)
 
-        self._loop.run_until_complete(
+        self._run_async(
             self.store.save_checkpoint(ckpt_id, payload.tensors, payload.metadata)
         )
 
@@ -526,7 +588,6 @@ class SpotLifecycleManager:
             self._checkpoint_count += 1
 
     def _do_emergency_checkpoint(self, iteration: int) -> None:
-        assert self._loop is not None
         event = self._interrupt_event
         payload = self.adapter.checkpoint_state()
         ckpt_id = f"{self.checkpoint_id_prefix}-{payload.method}-emergency-iter{iteration:06d}"
@@ -547,7 +608,7 @@ class SpotLifecycleManager:
                 event.seconds_remaining,
             )
 
-        self._loop.run_until_complete(
+        self._run_async(
             self.store.save_checkpoint(ckpt_id, payload.tensors, payload.metadata)
         )
 

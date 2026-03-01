@@ -1,0 +1,348 @@
+# Smoke test: full end-to-end spot interruption validation via AWS FIS.
+#
+# Triggered manually from the Actions tab.  Deploys the CDK stack, launches
+# a spot instance, waits for it to write a checkpoint, injects a spot
+# interruption via FIS, then relaunches and verifies the restore.
+#
+# Required secrets:
+#   AWS_ACCESS_KEY_ID       — IAM user with permissions listed in infra/README.md
+#   AWS_SECRET_ACCESS_KEY
+#
+# Optional inputs (workflow_dispatch):
+#   region          (default: us-east-1)
+#   instance_type   (default: c5.large)
+
+name: Smoke Test — FIS Spot Interruption
+
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: 'AWS region'
+        required: false
+        default: 'us-east-1'
+      instance_type:
+        description: 'EC2 instance type'
+        required: false
+        default: 'c5.large'
+
+jobs:
+  smoke-test:
+    name: Deploy → Interrupt → Restore → Verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 28        # ~20 min target; 28 min hard cap
+
+    env:
+      REGION: ${{ inputs.region || 'us-east-1' }}
+      JOB_PREFIX: smoke-test
+
+    steps:
+      # ------------------------------------------------------------------
+      # Setup
+      # ------------------------------------------------------------------
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ inputs.region || 'us-east-1' }}
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install CDK CLI
+        run: npm install -g aws-cdk
+
+      - name: Install CDK Python deps
+        working-directory: infra
+        run: pip install -r requirements.txt
+
+      # ------------------------------------------------------------------
+      # Step 1: Deploy CDK stack
+      # ------------------------------------------------------------------
+      - name: CDK bootstrap + deploy
+        id: deploy
+        working-directory: infra
+        run: |
+          ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+          echo "account=${ACCOUNT}" >> "$GITHUB_OUTPUT"
+
+          cdk bootstrap "aws://${ACCOUNT}/${{ env.REGION }}"
+
+          cdk deploy --require-approval never \
+            --outputs-file outputs.json \
+            --context "account=${ACCOUNT}" \
+            --context "region=${{ env.REGION }}"
+
+          BUCKET=$(jq -r '.SpotCheckpointSmoke.BucketName'       outputs.json)
+          LT_ID=$(jq  -r '.SpotCheckpointSmoke.LaunchTemplateId' outputs.json)
+          echo "bucket=${BUCKET}" >> "$GITHUB_OUTPUT"
+          echo "lt_id=${LT_ID}"   >> "$GITHUB_OUTPUT"
+          echo "Deployed: bucket=${BUCKET}  lt_id=${LT_ID}"
+
+      # ------------------------------------------------------------------
+      # Step 2: Ensure FIS IAM role exists (idempotent)
+      # ------------------------------------------------------------------
+      - name: Ensure FIS IAM role exists
+        id: fis_role
+        run: |
+          ROLE_NAME=SpotCheckpointFISRole
+
+          if ! aws iam get-role --role-name "${ROLE_NAME}" >/dev/null 2>&1; then
+            echo "Creating FIS role ${ROLE_NAME} ..."
+            aws iam create-role \
+              --role-name "${ROLE_NAME}" \
+              --assume-role-policy-document '{
+                "Version": "2012-10-17",
+                "Statement": [{
+                  "Effect": "Allow",
+                  "Principal": {"Service": "fis.amazonaws.com"},
+                  "Action": "sts:AssumeRole"
+                }]
+              }'
+            aws iam attach-role-policy \
+              --role-name "${ROLE_NAME}" \
+              --policy-arn arn:aws:iam::aws:policy/service-role/AWSFaultInjectionSimulatorEC2Access
+          fi
+
+          FIS_ROLE_ARN=$(aws iam get-role \
+            --role-name "${ROLE_NAME}" \
+            --query 'Role.Arn' --output text)
+          echo "arn=${FIS_ROLE_ARN}" >> "$GITHUB_OUTPUT"
+          echo "FIS role: ${FIS_ROLE_ARN}"
+
+      # ------------------------------------------------------------------
+      # Step 3: Launch first spot instance (will be interrupted by FIS)
+      # ------------------------------------------------------------------
+      - name: Launch first spot instance
+        id: instance1
+        run: |
+          INSTANCE_ID=$(aws ec2 run-instances \
+            --launch-template "LaunchTemplateId=${{ steps.deploy.outputs.lt_id }},Version=\$Latest" \
+            --count 1 \
+            --query 'Instances[0].InstanceId' \
+            --output text)
+          echo "id=${INSTANCE_ID}" >> "$GITHUB_OUTPUT"
+          echo "Launched instance: ${INSTANCE_ID}"
+
+      # ------------------------------------------------------------------
+      # Step 4: Wait for first checkpoint manifest to appear in S3
+      #         (confirms user-data ran, benchmark started, and checkpointed)
+      # ------------------------------------------------------------------
+      - name: Wait for first checkpoint manifest (timeout 10 min)
+        run: |
+          BUCKET="${{ steps.deploy.outputs.bucket }}"
+          echo "Polling s3://${BUCKET}/${JOB_PREFIX}/ for _manifest.json ..."
+          DEADLINE=$((SECONDS + 600))
+          while true; do
+            COUNT=$(aws s3 ls "s3://${BUCKET}/${JOB_PREFIX}/" --recursive \
+                      2>/dev/null | grep -c '_manifest\.json' || true)
+            if [ "${COUNT}" -gt 0 ]; then
+              echo "Found ${COUNT} manifest(s) — checkpoint confirmed"
+              break
+            fi
+            if [ "${SECONDS}" -ge "${DEADLINE}" ]; then
+              echo "ERROR: no checkpoint manifest after 10 minutes"
+              exit 1
+            fi
+            echo "  (${SECONDS}s elapsed) no manifest yet, retrying in 15s ..."
+            sleep 15
+          done
+
+      # ------------------------------------------------------------------
+      # Step 5: Register FIS experiment targeting the specific instance
+      #         (registered here so we have the instance ID for ARN targeting)
+      # ------------------------------------------------------------------
+      - name: Register FIS experiment template
+        id: fis_template
+        run: |
+          ACCOUNT="${{ steps.deploy.outputs.account }}"
+          INSTANCE_ID="${{ steps.instance1.outputs.id }}"
+          FIS_ROLE_ARN="${{ steps.fis_role.outputs.arn }}"
+          INSTANCE_ARN="arn:aws:ec2:${{ env.REGION }}:${ACCOUNT}:instance/${INSTANCE_ID}"
+
+          TEMPLATE_ID=$(aws fis create-experiment-template \
+            --cli-input-json "$(jq \
+              --arg  role "${FIS_ROLE_ARN}" \
+              --arg  arn  "${INSTANCE_ARN}" \
+              '.roleArn = $role
+              | .targets.smokeInstances.resourceArns = [$arn]
+              | del(.targets.smokeInstances.resourceTags)
+              | del(.logConfiguration)' \
+              infra/fis_experiment.json)" \
+            --query 'experimentTemplate.id' \
+            --output text)
+
+          echo "id=${TEMPLATE_ID}" >> "$GITHUB_OUTPUT"
+          echo "Registered FIS template: ${TEMPLATE_ID}"
+
+      # ------------------------------------------------------------------
+      # Step 6: Inject spot interruption via FIS
+      # ------------------------------------------------------------------
+      - name: Start FIS experiment
+        id: fis_exp
+        run: |
+          EXP_ID=$(aws fis start-experiment \
+            --experiment-template-id "${{ steps.fis_template.outputs.id }}" \
+            --query 'experiment.id' \
+            --output text)
+          echo "id=${EXP_ID}" >> "$GITHUB_OUTPUT"
+          echo "Started FIS experiment: ${EXP_ID}"
+
+      - name: Wait for FIS experiment to complete
+        run: |
+          EXP_ID="${{ steps.fis_exp.outputs.id }}"
+          DEADLINE=$((SECONDS + 360))
+          while true; do
+            STATUS=$(aws fis get-experiment \
+              --id "${EXP_ID}" \
+              --query 'experiment.state.status' \
+              --output text)
+            echo "  FIS status: ${STATUS}"
+            case "${STATUS}" in
+              completed)
+                echo "FIS experiment completed successfully"
+                break
+                ;;
+              failed|stopped)
+                REASON=$(aws fis get-experiment \
+                  --id "${EXP_ID}" \
+                  --query 'experiment.state.reason' --output text)
+                echo "ERROR: FIS experiment ended with status '${STATUS}': ${REASON}"
+                exit 1
+                ;;
+            esac
+            if [ "${SECONDS}" -ge "${DEADLINE}" ]; then
+              echo "ERROR: FIS experiment did not complete within 6 minutes"
+              exit 1
+            fi
+            sleep 15
+          done
+
+      # ------------------------------------------------------------------
+      # Step 7: Wait for the interrupted instance to terminate
+      # ------------------------------------------------------------------
+      - name: Wait for first instance to terminate
+        run: |
+          echo "Waiting for instance ${{ steps.instance1.outputs.id }} to terminate ..."
+          aws ec2 wait instance-terminated \
+            --instance-ids "${{ steps.instance1.outputs.id }}"
+          echo "Instance terminated"
+
+      # ------------------------------------------------------------------
+      # Step 8: Verify checkpoint data persists in S3
+      # ------------------------------------------------------------------
+      - name: Verify checkpoint data persists in S3
+        run: |
+          BUCKET="${{ steps.deploy.outputs.bucket }}"
+          echo "=== S3 objects under s3://${BUCKET}/${JOB_PREFIX}/ ==="
+          aws s3 ls "s3://${BUCKET}/${JOB_PREFIX}/" --recursive
+
+          MANIFEST_COUNT=$(aws s3 ls "s3://${BUCKET}/${JOB_PREFIX}/" --recursive \
+            | grep -c '_manifest\.json' || true)
+          SHARD_COUNT=$(aws s3 ls "s3://${BUCKET}/${JOB_PREFIX}/" --recursive \
+            | grep -vc '_manifest\.json' || true)
+
+          echo "Manifests: ${MANIFEST_COUNT}  Shards: ${SHARD_COUNT}"
+          [ "${MANIFEST_COUNT}" -ge 1 ] || { echo "ERROR: no manifests in S3"; exit 1; }
+          [ "${SHARD_COUNT}"    -ge 1 ] || { echo "ERROR: no shard files in S3"; exit 1; }
+          echo "Checkpoint data verified"
+
+      # ------------------------------------------------------------------
+      # Step 9: Launch restore instance
+      # ------------------------------------------------------------------
+      - name: Launch restore instance
+        id: instance2
+        run: |
+          INSTANCE_ID=$(aws ec2 run-instances \
+            --launch-template "LaunchTemplateId=${{ steps.deploy.outputs.lt_id }},Version=\$Latest" \
+            --count 1 \
+            --query 'Instances[0].InstanceId' \
+            --output text)
+          echo "id=${INSTANCE_ID}" >> "$GITHUB_OUTPUT"
+          echo "Launched restore instance: ${INSTANCE_ID}"
+
+      # ------------------------------------------------------------------
+      # Step 10: Wait for completion marker — proves restore ran to the end
+      # ------------------------------------------------------------------
+      - name: Wait for completion marker in S3 (timeout 10 min)
+        run: |
+          BUCKET="${{ steps.deploy.outputs.bucket }}"
+          MARKER="s3://${BUCKET}/${JOB_PREFIX}/completion-marker.json"
+          echo "Polling ${MARKER} ..."
+          DEADLINE=$((SECONDS + 600))
+          while true; do
+            if aws s3 ls "${MARKER}" >/dev/null 2>&1; then
+              echo "Completion marker found"
+              break
+            fi
+            if [ "${SECONDS}" -ge "${DEADLINE}" ]; then
+              echo "ERROR: completion marker not written within 10 minutes"
+              exit 1
+            fi
+            echo "  (${SECONDS}s elapsed) waiting ..."
+            sleep 15
+          done
+
+      # ------------------------------------------------------------------
+      # Step 11: Assert restore completed successfully
+      # ------------------------------------------------------------------
+      - name: Assert restore completed successfully
+        run: |
+          BUCKET="${{ steps.deploy.outputs.bucket }}"
+          aws s3 cp "s3://${BUCKET}/${JOB_PREFIX}/completion-marker.json" /tmp/completion.json
+          echo "=== Completion marker ==="
+          cat /tmp/completion.json
+
+          STATUS=$(jq -r '.status' /tmp/completion.json)
+          RESTORED_FROM=$(jq -r '.restored_from_iteration' /tmp/completion.json)
+
+          echo "status=${STATUS}  restored_from_iteration=${RESTORED_FROM}"
+          [ "${STATUS}" = "completed" ] \
+            || { echo "ERROR: unexpected status '${STATUS}'"; exit 1; }
+          [ "${RESTORED_FROM}" -gt 0 ] \
+            || { echo "ERROR: restore_from_iteration=${RESTORED_FROM} — restore did not run"; exit 1; }
+          echo "SUCCESS: spot interruption + checkpoint restore verified"
+
+      # ------------------------------------------------------------------
+      # Cleanup — always runs, even on failure
+      # ------------------------------------------------------------------
+      - name: Terminate instances
+        if: always()
+        run: |
+          for ID in \
+            "${{ steps.instance1.outputs.id }}" \
+            "${{ steps.instance2.outputs.id }}"; do
+            [ -n "${ID}" ] && \
+              aws ec2 terminate-instances --instance-ids "${ID}" 2>/dev/null || true
+          done
+
+      - name: Delete FIS experiment template
+        if: always()
+        run: |
+          TMPL="${{ steps.fis_template.outputs.id }}"
+          [ -n "${TMPL}" ] && \
+            aws fis delete-experiment-template --id "${TMPL}" 2>/dev/null || true
+
+      - name: CDK destroy
+        if: always()
+        working-directory: infra
+        run: |
+          ACCOUNT="${{ steps.deploy.outputs.account }}"
+          if [ -z "${ACCOUNT}" ]; then
+            echo "No account captured (deploy never ran) — skipping destroy"
+            exit 0
+          fi
+          cdk destroy --force \
+            --context "account=${ACCOUNT}" \
+            --context "region=${{ env.REGION }}"

@@ -21,7 +21,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `tests/conftest.py`: `moto_server` (ThreadedMotoServer) and `s3_store` fixtures for aioboto3-compatible S3 testing
 - `pyproject.toml`: added `flask` and `flask-cors` as dev dependencies for `moto[server]`
 
+### Added
+- `.github/workflows/smoke-test.yml`: manual `workflow_dispatch` CI job —
+  deploys CDK stack, launches spot instance, waits for checkpoint, injects FIS
+  spot interruption, relaunches restore instance, asserts completion marker
+  written with `restored_from_iteration > 0`; CDK stack always destroyed in
+  cleanup steps (resolves #18)
+- `infra/smoke_stack.py`: CDK stack — versioned S3 checkpoint bucket (7-day
+  lifecycle), IAM instance role (`ec2:CreateTags` added for self-tagging),
+  `c5.large` spot launch template (AL2023, IMDSv2 required, fake-solver
+  user-data with S3 completion marker on finish) (resolves #17)
+- `infra/app.py`: CDK app entry point
+- `infra/fis_experiment.json`: FIS experiment template — targets instances
+  tagged `spot-checkpoint-smoke-test=true`, sends 2-min interruption notice
+  then terminates (`aws:ec2:send-spot-instance-interruptions`)
+- `infra/requirements.txt`: `aws-cdk-lib` + `constructs` deps
+- `infra/README.md`: step-by-step deploy and smoke-test runbook
+- `DirectEC2Backend`: full IMDSv2 token flow — 6-hour TTL, cached token with
+  automatic refresh before expiry, graceful IMDSv1 fallback when PUT fails
+- `tests/test_direct_ec2_backend.py`: 11 tests covering token acquisition,
+  TTL header, refresh-near-expiry, IMDSv1 fallback, and interrupt detection
+  (resolves #16)
+
 ### Fixed
+- `SpotLifecycleManager` now runs its async event loop on a dedicated background
+  daemon thread and uses `asyncio.run_coroutine_threadsafe` instead of
+  `loop.run_until_complete` — fixes `RuntimeError: Cannot run the event loop while
+  another loop is running` when `check()` is called from an async context
+  (resolves #15)
 - `storage.py`: corrected import names (`CheckpointCorruptionError`, `CheckpointReadError`, `TensorSpec`) to match `protocol.py`
 - `storage.py`: fixed `LocalStore.save_checkpoint` to construct `CheckpointManifest` with correct fields (`tensor_specs`, `method`); use `manifest.to_dict()` for serialization
 - `storage.py`: fixed `load_checkpoint` to read `tensor_specs` key from manifest JSON
