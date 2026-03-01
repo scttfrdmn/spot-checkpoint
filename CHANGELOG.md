@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `adapters/pyscf.py`: CASSCF external solver support — `_find_mps_dir`, `_tar_directory`, `_untar_directory` helpers; `CASSCFCheckpointAdapter` now detects Block2/DMRG scratch directories, tars them to `ci_mps_tar` (uint8 numpy array), and untars on restore (closes #14)
+- `tests/test_external_solver_helpers.py`: 8 new tests for `_tar_directory`, `_untar_directory`, and `_find_mps_dir` helpers — no PySCF dependency
+- `tests/test_adapters_pyscf.py`: `TestCASSCFExternalSolver` class — 5 mock-based integration tests for external solver checkpoint/restore path
 - `tests/test_adapters_pyscf.py`: Expanded PySCF adapter test suite — 15 new tests covering SCF/CCSD/CASSCF restore roundtrips, AdapterError before kernel, metadata field assertions, size estimates, and end-to-end save/load via LocalStore (closes #13)
 - `cli.py`: Full typer CLI implementation — `list`, `info`, `gc`, `bench` subcommands with `--json` output; `_make_store` helper supports both local paths and `s3://` URIs (closes #11)
 - `tests/test_gc.py`: 8 tests for `garbage_collect()` covering empty store, no-keep, keep-N, keep ≥ total, keep-zero, keep-one, prefix forwarding, and return-dict shape (closes #5)

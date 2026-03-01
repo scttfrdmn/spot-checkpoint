@@ -13,8 +13,11 @@ See docs/ARCHITECTURE.md Layer 2 for design details and size estimates.
 
 from __future__ import annotations
 
+import io
 import logging
+import tarfile
 import time
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -22,6 +25,46 @@ import numpy as np
 from spot_checkpoint.protocol import AdapterError, CheckpointPayload
 
 logger = logging.getLogger(__name__)
+
+# Attribute names to probe on mc.fcisolver / mc.ci to locate the MPS scratch dir
+_MPS_DIR_ATTRS = ("scratch", "runtimedir", "tmpdir", "workdir", "directory", "path")
+
+
+def _tar_directory(src_dir: Path) -> np.ndarray:
+    """Tar-gzip a directory and return its bytes as a uint8 numpy array."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        tar.add(src_dir, arcname=".")
+    return np.frombuffer(buf.getvalue(), dtype=np.uint8)
+
+
+def _untar_directory(data: np.ndarray, dest_dir: Path) -> None:
+    """Extract a tar-gzip uint8 array into dest_dir."""
+    buf = io.BytesIO(data.tobytes())
+    with tarfile.open(fileobj=buf, mode="r:gz") as tar:
+        tar.extractall(dest_dir)
+
+
+def _find_mps_dir(mc: Any) -> Path | None:
+    """Probe common attributes on mc.fcisolver and mc.ci to find the MPS directory.
+
+    Returns the first Path that resolves to an existing directory, or None.
+    """
+    candidates: list[Any] = []
+    if hasattr(mc, "fcisolver"):
+        candidates.append(mc.fcisolver)
+    if hasattr(mc, "ci") and mc.ci is not None:
+        candidates.append(mc.ci)
+
+    for obj in candidates:
+        for attr in _MPS_DIR_ATTRS:
+            val = getattr(obj, attr, None)
+            if val is None:
+                continue
+            p = Path(str(val))
+            if p.is_dir():
+                return p
+    return None
 
 
 class SCFCheckpointAdapter:
@@ -144,12 +187,12 @@ class CASSCFCheckpointAdapter:
 
     State captured:
       - mo_coeff: MO coefficients
-      - ci: CI vector (can be enormous for large active spaces)
+      - ci: CI vector (numpy array, standard FCI)
+      - ci_mps_tar: tar-gzipped MPS directory (external solver, e.g. Block2/DMRG)
 
     For external solvers (Block2/DMRG, Dice/SHCI), the MPS state
-    lives on disk — this adapter captures it as a binary blob.
-
-    TODO: External solver support is deferred to v2.
+    lives on disk — this adapter detects the scratch directory and
+    captures it as a uint8 numpy array (tar-gzip).
     """
 
     def __init__(self, mc: Any) -> None:
@@ -167,11 +210,22 @@ class CASSCFCheckpointAdapter:
             if isinstance(self.mc.ci, np.ndarray):
                 tensors["ci"] = self.mc.ci
             else:
-                logger.warning(
-                    "CI vector is not a numpy array (type=%s) — external solver? "
-                    "Skipping CI checkpoint. External solver support is TODO.",
-                    type(self.mc.ci).__name__,
-                )
+                mps_dir = _find_mps_dir(self.mc)
+                if mps_dir is not None:
+                    tensors["ci_mps_tar"] = _tar_directory(mps_dir)
+                    metadata["ci_mps_dir"] = str(mps_dir)
+                    metadata["ci_external_solver"] = type(self.mc.ci).__name__
+                    logger.info(
+                        "CASSCF external solver MPS tarred: dir=%s, bytes=%d",
+                        mps_dir,
+                        tensors["ci_mps_tar"].nbytes,
+                    )
+                else:
+                    logger.warning(
+                        "CI vector is not a numpy array (type=%s) and no MPS "
+                        "directory found — external solver CI cannot be checkpointed.",
+                        type(self.mc.ci).__name__,
+                    )
 
         metadata: dict[str, Any] = {
             "e_tot": float(self.mc.e_tot) if self.mc.e_tot else None,
@@ -192,6 +246,11 @@ class CASSCFCheckpointAdapter:
         self.mc.mo_coeff = payload.tensors["mo_coeff"]
         if "ci" in payload.tensors:
             self.mc.ci = payload.tensors["ci"]
+        elif "ci_mps_tar" in payload.tensors:
+            mps_dir = Path(payload.metadata["ci_mps_dir"])
+            mps_dir.mkdir(parents=True, exist_ok=True)
+            _untar_directory(payload.tensors["ci_mps_tar"], mps_dir)
+            logger.info("CASSCF external solver MPS restored to %s", mps_dir)
         logger.info(
             "CASSCF state restored: e_tot=%s, ncas=%s, nelecas=%s",
             payload.metadata.get("e_tot"),
@@ -212,9 +271,17 @@ class CASSCFCheckpointAdapter:
         else:
             nalpha = nbeta = nelecas // 2
 
-        # Rough estimate: C(ncas, nalpha) × C(ncas, nbeta) × 8 bytes
-        from math import comb
-        ci_elements = comb(ncas, nalpha) * comb(ncas, nbeta)
-        ci_bytes = ci_elements * 8
+        if self.mc.ci is None or isinstance(self.mc.ci, np.ndarray):
+            # Rough estimate: C(ncas, nalpha) × C(ncas, nbeta) × 8 bytes
+            from math import comb
+            ci_elements = comb(ncas, nalpha) * comb(ncas, nbeta)
+            ci_bytes = ci_elements * 8
+        else:
+            mps_dir = _find_mps_dir(self.mc)
+            ci_bytes = (
+                sum(f.stat().st_size for f in mps_dir.rglob("*") if f.is_file())
+                if mps_dir is not None
+                else 0
+            )
 
         return mo_bytes + ci_bytes
