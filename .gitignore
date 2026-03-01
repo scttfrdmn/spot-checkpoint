@@ -23,3 +23,7 @@ ENV/
 *.swp
 *.swo
 *~
+
+# CDK synthesis output and local venv
+infra/cdk.out/
+infra/.venv/
