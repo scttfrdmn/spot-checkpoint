@@ -14,7 +14,7 @@ pyscf = pytest.importorskip("pyscf")
 @pytest.mark.integration
 class TestSCFAdapter:
     def test_checkpoint_roundtrip(self):
-        """Run small SCF, checkpoint, restore, verify."""
+        """Run small SCF, checkpoint, verify chkfile blob is stored."""
         from pyscf import gto, scf
         from spot_checkpoint.adapters.pyscf import SCFCheckpointAdapter
 
@@ -25,8 +25,8 @@ class TestSCFAdapter:
         adapter = SCFCheckpointAdapter(mf)
         payload = adapter.checkpoint_state()
 
-        assert "mo_coeff" in payload.tensors
-        assert "mo_occ" in payload.tensors
+        assert "chkfile" in payload.tensors
+        assert payload.tensors["chkfile"].dtype == np.uint8
         assert payload.metadata["converged"] is True
         assert payload.total_bytes > 0
 
@@ -43,7 +43,7 @@ class TestSCFAdapter:
         assert estimate < 1e9  # Should be small for H2/sto-3g
 
     def test_restore_roundtrip(self):
-        """Checkpoint after convergence, restore into fresh solver, verify MOs match."""
+        """Checkpoint after convergence, restore into fresh solver, verify energy matches."""
         from pyscf import gto, scf
         from spot_checkpoint.adapters.pyscf import SCFCheckpointAdapter
 
@@ -58,12 +58,10 @@ class TestSCFAdapter:
         adapter2 = SCFCheckpointAdapter(mf2)
         adapter2.restore_state(payload)
 
-        np.testing.assert_array_almost_equal(mf2.mo_coeff, mf.mo_coeff)
-        np.testing.assert_array_almost_equal(mf2.mo_energy, mf.mo_energy)
-
-        # Re-running from restored MOs should converge to same energy
-        e_tot2 = mf2.kernel(mf2.mo_coeff)
+        # restore_state sets init_guess='chkfile'; kernel() reads the saved MOs
+        e_tot2 = mf2.kernel()
         assert e_tot2 == pytest.approx(mf.e_tot, rel=1e-6)
+        np.testing.assert_array_almost_equal(mf2.mo_coeff, mf.mo_coeff)
 
     def test_adapter_error_before_kernel(self):
         """checkpoint_state raises AdapterError if SCF has not been run."""
@@ -95,7 +93,7 @@ class TestSCFAdapter:
         assert payload.method == "scf"
         assert payload.metadata["converged"] is True
         assert payload.metadata["e_tot"] == pytest.approx(mf.e_tot, rel=1e-10)
-        assert "mo_energy" in payload.tensors
+        assert "chkfile" in payload.tensors
 
 
 @pytest.mark.integration
@@ -287,6 +285,9 @@ class TestPySCFWithLocalStore:
         adapter2 = SCFCheckpointAdapter(mf2)
         adapter2.restore_state(CheckpointPayload(tensors=tensors, metadata=metadata, method="scf"))
 
+        # restore_state sets init_guess='chkfile'; kernel() reads the saved MOs
+        e_tot2 = mf2.kernel()
+        assert e_tot2 == pytest.approx(e_tot_original, rel=1e-6)
         np.testing.assert_array_almost_equal(mf2.mo_coeff, mf.mo_coeff)
         assert metadata["e_tot"] == pytest.approx(e_tot_original, rel=1e-10)
 

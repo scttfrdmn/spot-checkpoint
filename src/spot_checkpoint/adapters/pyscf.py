@@ -9,6 +9,16 @@ interrupted calculation.
 PySCF is an optional dependency — these adapters import lazily and fail
 with a clear message if PySCF is not installed.
 
+Checkpointing strategy per method:
+  SCF    — PySCF's native HDF5 chkfile (pyscf.scf.chkfile.dump_scf).
+             Restore sets mf.init_guess = 'chkfile'; kernel() reads it.
+  CCSD   — t1/t2 amplitudes stored directly as numpy arrays.
+             Restore sets mycc.t1/t2; call mycc.kernel(t1, t2) to resume.
+             This is PySCF's documented CCSD restart path.
+  CASSCF — mo_coeff (numpy), CI vector (numpy), or MPS scratch dir (tar).
+             Restore sets mc.mo_coeff (and mc.ci); call mc.kernel(mo) to resume.
+             This is PySCF's documented CASSCF restart path.
+
 See docs/ARCHITECTURE.md Layer 2 for design details and size estimates.
 """
 
@@ -17,6 +27,7 @@ from __future__ import annotations
 import io
 import logging
 import tarfile
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -72,12 +83,12 @@ class SCFCheckpointAdapter:
     """
     Wraps a PySCF SCF solver (RHF, UHF, ROHF, RKS, UKS).
 
-    State captured:
-      - mo_coeff: MO coefficients (nao × nmo)
-      - mo_occ: occupation numbers (nmo)
-      - mo_energy: orbital energies (nmo)
+    Uses PySCF's native HDF5 chkfile for checkpoint/restore via
+    pyscf.scf.chkfile.dump_scf(). On restore, sets mf.init_guess = 'chkfile'
+    so PySCF reads the saved MOs on the next kernel() call — PySCF's own
+    documented restart path.
 
-    Checkpoint size: nao × nmo × 8 × 3 — typically < 100MB.
+    Checkpoint size: one HDF5 file — typically < 1 MB for most molecules.
     """
 
     def __init__(self, mf: Any) -> None:
@@ -87,37 +98,47 @@ class SCFCheckpointAdapter:
         if self.mf.mo_coeff is None:
             raise AdapterError("SCF solver has no state to checkpoint (not started?)")
 
-        tensors: dict[str, np.ndarray] = {
-            "mo_coeff": np.asarray(self.mf.mo_coeff),
-            "mo_occ": np.asarray(self.mf.mo_occ),
-            "mo_energy": np.asarray(self.mf.mo_energy),
-        }
+        from pyscf.scf.chkfile import dump_scf  # type: ignore[import-not-found]
+
+        # Ensure there is a chkfile path to write to
+        chkfile = self.mf.chkfile
+        if not chkfile:
+            with tempfile.NamedTemporaryFile(suffix=".chk", delete=False) as tmp:
+                chkfile = tmp.name
+            self.mf.chkfile = chkfile
+
+        # Flush the current MO state using PySCF's own serialisation
+        dump_scf(
+            self.mf.mol, chkfile,
+            self.mf.e_tot, self.mf.mo_energy, self.mf.mo_coeff, self.mf.mo_occ,
+        )
+
+        chk_bytes = np.frombuffer(Path(chkfile).read_bytes(), dtype=np.uint8)
 
         metadata: dict[str, Any] = {
             "e_tot": float(self.mf.e_tot) if self.mf.e_tot else None,
             "converged": bool(self.mf.converged) if hasattr(self.mf, "converged") else None,
             "method": "scf",
         }
-
-        # Try to get iteration count (internal attribute)
         if hasattr(self.mf, "_iter"):
             metadata["iteration"] = self.mf._iter
 
         return CheckpointPayload(
-            tensors=tensors,
+            tensors={"chkfile": chk_bytes},
             metadata=metadata,
             method="scf",
             timestamp=time.time(),
         )
 
     def restore_state(self, payload: CheckpointPayload) -> None:
-        self.mf.mo_coeff = payload.tensors["mo_coeff"]
-        self.mf.mo_occ = payload.tensors["mo_occ"]
-        self.mf.mo_energy = payload.tensors["mo_energy"]
+        with tempfile.NamedTemporaryFile(suffix=".chk", delete=False) as tmp:
+            tmp.write(payload.tensors["chkfile"].tobytes())
+            chkfile_path = tmp.name
+        self.mf.chkfile = chkfile_path
+        self.mf.init_guess = "chkfile"
         logger.info(
-            "SCF state restored: e_tot=%s, iteration=%s",
+            "SCF state restored via chkfile: e_tot=%s (call kernel() to resume)",
             payload.metadata.get("e_tot"),
-            payload.metadata.get("iteration"),
         )
 
     @property
@@ -130,6 +151,10 @@ class SCFCheckpointAdapter:
 class CCSDCheckpointAdapter:
     """
     Wraps a PySCF CCSD solver (CCSD, RCCSD, UCCSD).
+
+    Saves t1/t2 amplitudes directly. On restore, sets mycc.t1 and mycc.t2
+    so the caller can resume with mycc.kernel(mycc.t1, mycc.t2) — PySCF's
+    documented CCSD restart path.
 
     State captured:
       - t1: singles amplitudes (nocc × nvir) — small
@@ -168,7 +193,8 @@ class CCSDCheckpointAdapter:
         self.mycc.t1 = payload.tensors["t1"]
         self.mycc.t2 = payload.tensors["t2"]
         logger.info(
-            "CCSD state restored: e_corr=%s, t2 shape=%s (%.1f MB)",
+            "CCSD state restored: e_corr=%s, t2 shape=%s (%.1f MB) — "
+            "call kernel(t1, t2) to resume",
             payload.metadata.get("e_corr"),
             self.mycc.t2.shape,
             self.mycc.t2.nbytes / 1e6,
@@ -185,6 +211,10 @@ class CCSDCheckpointAdapter:
 class CASSCFCheckpointAdapter:
     """
     Wraps a PySCF CASSCF solver.
+
+    Saves mo_coeff and (where available) the CI vector or MPS scratch
+    directory. On restore, sets mc.mo_coeff and mc.ci; call mc.kernel(mo)
+    to resume — PySCF's documented CASSCF restart path.
 
     State captured:
       - mo_coeff: MO coefficients
@@ -253,7 +283,8 @@ class CASSCFCheckpointAdapter:
             _untar_directory(payload.tensors["ci_mps_tar"], mps_dir)
             logger.info("CASSCF external solver MPS restored to %s", mps_dir)
         logger.info(
-            "CASSCF state restored: e_tot=%s, ncas=%s, nelecas=%s",
+            "CASSCF state restored: e_tot=%s, ncas=%s, nelecas=%s — "
+            "call kernel(mo_coeff) to resume",
             payload.metadata.get("e_tot"),
             payload.metadata.get("ncas"),
             payload.metadata.get("nelecas"),

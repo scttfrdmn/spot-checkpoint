@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- `SCFCheckpointAdapter`: replaced manual numpy extraction of `mo_coeff`/`mo_occ`/`mo_energy`
+  with PySCF's native `pyscf.scf.chkfile.dump_scf()` — stores a single HDF5 blob (`"chkfile"`
+  uint8 tensor); `restore_state()` writes it to a temp file and sets `mf.init_guess = "chkfile"`
+  so `mf.kernel()` reads the saved MOs directly (PySCF's documented restart path) (closes #33)
+- `CCSDCheckpointAdapter`: docstring clarified — saving t1/t2 and calling
+  `mycc.kernel(t1, t2)` is PySCF's own documented CCSD restart; no logic change
+- `CASSCFCheckpointAdapter`: docstring clarified — `mc.kernel(mo_coeff)` is PySCF's
+  documented CASSCF restart; no logic change
+- `tests/test_adapters_pyscf.py`: updated SCF tests — `test_checkpoint_roundtrip` checks
+  `"chkfile"` key; `test_restore_roundtrip` and `test_scf_save_restore_via_store` call
+  `mf.kernel()` after `restore_state()` then assert energy convergence
+
 ## [0.6.0] - 2026-02-28
 
 ### Added
