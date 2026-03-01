@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-02-28
+
 ### Added
 - `adapters/pyscf.py`: CASSCF external solver support — `_find_mps_dir`, `_tar_directory`, `_untar_directory` helpers; `CASSCFCheckpointAdapter` now detects Block2/DMRG scratch directories, tars them to `ci_mps_tar` (uint8 numpy array), and untars on restore (closes #14)
 - `tests/test_external_solver_helpers.py`: 8 new tests for `_tar_directory`, `_untar_directory`, and `_find_mps_dir` helpers — no PySCF dependency
@@ -90,5 +92,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `docs/ARCHITECTURE.md`: full three-layer design spec with throughput math and open questions
 - `pyproject.toml`: `hatchling` build, `uv`-compatible dependency spec
 
-[Unreleased]: https://github.com/scttfrdmn/spot-checkpoint/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/scttfrdmn/spot-checkpoint/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/scttfrdmn/spot-checkpoint/compare/v0.1.0...v0.5.0
 [0.1.0]: https://github.com/scttfrdmn/spot-checkpoint/releases/tag/v0.1.0
