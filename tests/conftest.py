@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -11,7 +10,7 @@ import numpy as np
 import pytest
 
 from spot_checkpoint.protocol import CheckpointPayload
-from spot_checkpoint.storage import LocalStore
+from spot_checkpoint.storage import LocalStore, S3ShardedStore
 
 
 @pytest.fixture
@@ -81,3 +80,57 @@ def fake_solver() -> FakeSolver:
 @pytest.fixture
 def fake_adapter(fake_solver: FakeSolver) -> FakeCheckpointAdapter:
     return FakeCheckpointAdapter(solver=fake_solver)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def aws_credentials() -> None:
+    """Set fake AWS credentials so aioboto3 doesn't try to look up real ones."""
+    import os
+
+    os.environ.setdefault("AWS_ACCESS_KEY_ID", "testing")
+    os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "testing")
+    os.environ.setdefault("AWS_SECURITY_TOKEN", "testing")
+    os.environ.setdefault("AWS_SESSION_TOKEN", "testing")
+    os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
+
+
+@pytest.fixture(scope="session")
+def moto_server() -> Any:
+    """Session-scoped ThreadedMotoServer for S3 tests."""
+    from moto.server import ThreadedMotoServer
+
+    server = ThreadedMotoServer(port=5555, verbose=False)
+    server.start()
+    yield server
+    server.stop()
+
+
+@pytest.fixture
+async def s3_store(moto_server: Any) -> Any:
+    """S3ShardedStore backed by a ThreadedMotoServer, with 4KB shards."""
+    import boto3
+
+    endpoint_url = "http://127.0.0.1:5555"
+    # Create a fresh bucket for this test
+    s3 = boto3.client(
+        "s3",
+        region_name="us-east-1",
+        endpoint_url=endpoint_url,
+        aws_access_key_id="testing",
+        aws_secret_access_key="testing",
+    )
+    s3.create_bucket(Bucket="test-bucket")
+    store = S3ShardedStore(
+        bucket="test-bucket",
+        job_id="test-job",
+        shard_size=4 * 1024,
+        region="us-east-1",
+        endpoint_url=endpoint_url,
+    )
+    yield store
+    # Clean up bucket after test
+    response = s3.list_objects_v2(Bucket="test-bucket")
+    objects = [{"Key": obj["Key"]} for obj in response.get("Contents", [])]
+    if objects:
+        s3.delete_objects(Bucket="test-bucket", Delete={"Objects": objects})
+    s3.delete_bucket(Bucket="test-bucket")

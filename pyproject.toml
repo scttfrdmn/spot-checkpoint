@@ -37,6 +37,8 @@ dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
     "moto[s3]>=5.0",
+    "flask>=3.0",
+    "flask-cors>=4.0",
     "ruff>=0.4",
     "mypy>=1.10",
 ]
@@ -69,4 +71,11 @@ asyncio_mode = "auto"
 markers = [
     "integration: requires PySCF installed",
     "benchmark: S3 throughput benchmarks (need real AWS)",
+]
+
+[dependency-groups]
+dev = [
+    "flask>=3.1.3",
+    "flask-cors>=6.0.2",
+    "werkzeug>=3.1.6",
 ]

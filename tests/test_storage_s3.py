@@ -1,0 +1,137 @@
+"""Tests for S3ShardedStore using moto ThreadedMotoServer."""
+
+from __future__ import annotations
+
+from typing import Any
+
+import boto3
+import numpy as np
+import pytest
+
+from spot_checkpoint.protocol import CheckpointCorruptionError, CheckpointReadError
+from spot_checkpoint.storage import S3ShardedStore
+
+pytestmark = pytest.mark.asyncio
+
+
+def _boto3_client(endpoint_url: str) -> Any:
+    return boto3.client(
+        "s3",
+        region_name="us-east-1",
+        endpoint_url=endpoint_url,
+        aws_access_key_id="testing",
+        aws_secret_access_key="testing",
+    )
+
+
+async def test_save_and_load_roundtrip(s3_store: S3ShardedStore) -> None:
+    """Save a small tensor and reload it; verify array equality and metadata passthrough."""
+    arr = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float64)
+    metadata = {"method": "test", "iteration": 5}
+
+    await s3_store.save_checkpoint("ckpt-001", {"weights": arr}, metadata)
+    tensors, meta = await s3_store.load_checkpoint("ckpt-001")
+
+    np.testing.assert_array_equal(tensors["weights"], arr)
+    assert meta["iteration"] == 5
+    assert meta["method"] == "test"
+
+
+async def test_sharding_splits_large_tensor(s3_store: S3ShardedStore) -> None:
+    """Tensor larger than shard_size (4KB) must produce multiple shard objects in S3."""
+    # 10 rows × 100 float64 = 8000 bytes > 4096 → at least 2 shards
+    arr = np.ones((10, 100), dtype=np.float64)
+
+    await s3_store.save_checkpoint("ckpt-sharded", {"data": arr}, {})
+
+    s3 = _boto3_client(s3_store.endpoint_url)  # type: ignore[arg-type]
+    resp = s3.list_objects_v2(
+        Bucket="test-bucket", Prefix="test-job/ckpt/ckpt-sharded/data/"
+    )
+    shard_keys = [obj["Key"] for obj in resp.get("Contents", [])]
+    assert len(shard_keys) >= 2, f"Expected multiple shards, got {shard_keys}"
+
+    # Verify round-trip still works
+    tensors, _ = await s3_store.load_checkpoint("ckpt-sharded")
+    np.testing.assert_array_equal(tensors["data"], arr)
+
+
+async def test_checksum_corruption_raises(s3_store: S3ShardedStore) -> None:
+    """Overwriting a shard with junk bytes must raise CheckpointCorruptionError on load."""
+    arr = np.ones((10, 100), dtype=np.float64)  # 8000 bytes → multiple shards
+
+    await s3_store.save_checkpoint("ckpt-corrupt", {"data": arr}, {})
+
+    # Overwrite the first shard with garbage
+    s3 = _boto3_client(s3_store.endpoint_url)  # type: ignore[arg-type]
+    s3.put_object(
+        Bucket="test-bucket",
+        Key="test-job/ckpt/ckpt-corrupt/data/shard-0000",
+        Body=b"\x00" * 4096,
+    )
+
+    with pytest.raises(CheckpointCorruptionError):
+        await s3_store.load_checkpoint("ckpt-corrupt")
+
+
+async def test_missing_manifest_raises(s3_store: S3ShardedStore) -> None:
+    """Loading a non-existent checkpoint id must raise CheckpointReadError."""
+    with pytest.raises(CheckpointReadError):
+        await s3_store.load_checkpoint("does-not-exist")
+
+
+async def test_list_checkpoints_prefix_filter(s3_store: S3ShardedStore) -> None:
+    """list_checkpoints with a prefix filter returns only matching checkpoints."""
+    arr = np.ones((4,), dtype=np.float32)
+
+    await s3_store.save_checkpoint("scf-001", {"x": arr}, {"method": "scf"})
+    await s3_store.save_checkpoint("scf-002", {"x": arr}, {"method": "scf"})
+    await s3_store.save_checkpoint("ccsd-001", {"x": arr}, {"method": "ccsd"})
+
+    scf_results = await s3_store.list_checkpoints("scf-")
+    assert len(scf_results) == 2
+    assert all(r["metadata"]["method"] == "scf" for r in scf_results)
+
+    ccsd_results = await s3_store.list_checkpoints("ccsd-")
+    assert len(ccsd_results) == 1
+
+
+async def test_list_excludes_incomplete(s3_store: S3ShardedStore) -> None:
+    """A checkpoint with shards but no manifest must not appear in list_checkpoints."""
+    s3 = _boto3_client(s3_store.endpoint_url)  # type: ignore[arg-type]
+    # Write a shard without a manifest
+    s3.put_object(
+        Bucket="test-bucket",
+        Key="test-job/ckpt/orphan-001/data/shard-0000",
+        Body=b"\x00" * 100,
+    )
+
+    results = await s3_store.list_checkpoints("orphan-")
+    assert results == []
+
+
+async def test_delete_removes_all_keys(s3_store: S3ShardedStore) -> None:
+    """After delete_checkpoint, no S3 keys should remain under that prefix."""
+    arr = np.ones((10, 100), dtype=np.float64)
+
+    await s3_store.save_checkpoint("ckpt-del", {"weights": arr}, {})
+    await s3_store.delete_checkpoint("ckpt-del")
+
+    s3 = _boto3_client(s3_store.endpoint_url)  # type: ignore[arg-type]
+    resp = s3.list_objects_v2(Bucket="test-bucket", Prefix="test-job/ckpt/ckpt-del/")
+    assert resp.get("KeyCount", 0) == 0, "Expected no keys after deletion"
+
+
+async def test_large_sharded_roundtrip(s3_store: S3ShardedStore) -> None:
+    """Full roundtrip for a ~720KB tensor producing ~175 shards at 4KB each."""
+    # (10, 10, 30, 30) float64 = 720,000 bytes → ~175 shards at 4096 bytes
+    arr = np.random.default_rng(42).standard_normal((10, 10, 30, 30)).astype(np.float64)
+
+    manifest = await s3_store.save_checkpoint(
+        "ckpt-large", {"mo_coeff": arr}, {"method": "casscf"}
+    )
+    assert manifest.tensor_specs["mo_coeff"].num_shards > 100
+
+    tensors, meta = await s3_store.load_checkpoint("ckpt-large")
+    np.testing.assert_array_equal(tensors["mo_coeff"], arr)
+    assert meta["method"] == "casscf"

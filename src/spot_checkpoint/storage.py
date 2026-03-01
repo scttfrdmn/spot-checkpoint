@@ -3,7 +3,6 @@ Checkpoint Storage Engine — Layer 1.
 
 S3-sharded and local-filesystem implementations of CheckpointStore.
 
-TODO: Implement S3ShardedStore and LocalStore.
 See docs/ARCHITECTURE.md for full design specification.
 """
 
@@ -12,20 +11,49 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
+import time
 from pathlib import Path
 from typing import Any, Literal
 
+import aioboto3
 import numpy as np
+import xxhash
+from botocore.config import Config
+from botocore.exceptions import ClientError
 
 from spot_checkpoint.protocol import (
     CheckpointCorruptionError,
     CheckpointManifest,
     CheckpointReadError,
+    CheckpointWriteError,
     TensorSpec,
 )
 
 logger = logging.getLogger(__name__)
+
+
+async def _put_with_sem(
+    s3: Any,
+    sem: asyncio.Semaphore,
+    bucket: str,
+    key: str,
+    body: bytes,
+) -> None:
+    """Upload a single shard to S3, respecting the concurrency semaphore."""
+    async with sem:
+        await s3.put_object(Bucket=bucket, Key=key, Body=body)
+
+
+async def _get_with_sem(
+    s3: Any,
+    sem: asyncio.Semaphore,
+    bucket: str,
+    key: str,
+) -> bytes:
+    """Download a single shard from S3, respecting the concurrency semaphore."""
+    async with sem:
+        resp = await s3.get_object(Bucket=bucket, Key=key)
+        return await resp["Body"].read()  # type: ignore[no-any-return]
 
 
 class LocalStore:
@@ -54,10 +82,6 @@ class LocalStore:
     ) -> CheckpointManifest:
         ckpt_path = self._ckpt_dir / checkpoint_id
         ckpt_path.mkdir(parents=True, exist_ok=True)
-
-        import time
-
-        import xxhash
 
         tensor_specs: dict[str, TensorSpec] = {}
         total_bytes = 0
@@ -101,8 +125,6 @@ class LocalStore:
 
         if not manifest_path.exists():
             raise CheckpointReadError(f"No manifest found for checkpoint {checkpoint_id}")
-
-        import xxhash
 
         manifest_data = json.loads(manifest_path.read_text())
         tensors: dict[str, np.ndarray] = {}
@@ -152,8 +174,6 @@ class S3ShardedStore:
     """
     S3-optimized checkpoint store with parallel sharded writes.
 
-    TODO: Full implementation. See docs/ARCHITECTURE.md for design.
-
     Key features:
       - Tensors chunked into configurable shards (default 64MB)
       - Parallel PUTs across prefixed keys for horizontal S3 scaling
@@ -169,6 +189,7 @@ class S3ShardedStore:
         max_concurrency: int = 32,
         endpoint_strategy: Literal["standard", "accelerate", "vpc"] = "vpc",
         region: str | None = None,
+        endpoint_url: str | None = None,
     ) -> None:
         self.bucket = bucket
         self.job_id = job_id
@@ -176,6 +197,23 @@ class S3ShardedStore:
         self.max_concurrency = max_concurrency
         self.endpoint_strategy = endpoint_strategy
         self.region = region
+        self.endpoint_url = endpoint_url
+
+    def _prefix(self, checkpoint_id: str) -> str:
+        return f"{self.job_id}/ckpt/{checkpoint_id}"
+
+    def _client_kwargs(self) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {}
+        if self.region:
+            kwargs["region_name"] = self.region
+        if self.endpoint_url:
+            kwargs["endpoint_url"] = self.endpoint_url
+        if self.endpoint_strategy == "accelerate":
+            kwargs["config"] = Config(s3={"use_accelerate_endpoint": True})
+        return kwargs
+
+    def _shard_bytes(self, data: bytes) -> list[bytes]:
+        return [data[i : i + self.shard_size] for i in range(0, len(data), self.shard_size)]
 
     async def save_checkpoint(
         self,
@@ -183,16 +221,152 @@ class S3ShardedStore:
         tensors: dict[str, np.ndarray],
         metadata: dict[str, Any],
     ) -> CheckpointManifest:
-        raise NotImplementedError("S3ShardedStore.save_checkpoint — see ARCHITECTURE.md")
+        """Save tensors to S3 as parallel sharded objects, then write manifest last."""
+        session = aioboto3.Session()
+        async with session.client("s3", **self._client_kwargs()) as s3:
+            sem = asyncio.Semaphore(self.max_concurrency)
+            tensor_specs: dict[str, TensorSpec] = {}
+            all_puts: list[Any] = []
+
+            for name, tensor in tensors.items():
+                raw = tensor.tobytes()
+                shards = self._shard_bytes(raw)
+                checksums = [xxhash.xxh64(s).hexdigest() for s in shards]
+                tensor_specs[name] = TensorSpec(
+                    shape=tuple(tensor.shape),
+                    dtype=str(tensor.dtype),
+                    nbytes=tensor.nbytes,
+                    num_shards=len(shards),
+                    shard_size=self.shard_size,
+                    checksums=checksums,
+                )
+                for i, shard in enumerate(shards):
+                    key = f"{self._prefix(checkpoint_id)}/{name}/shard-{i:04d}"
+                    all_puts.append(_put_with_sem(s3, sem, self.bucket, key, shard))
+
+            try:
+                await asyncio.gather(*all_puts)
+            except Exception as exc:
+                raise CheckpointWriteError(
+                    f"Failed to write shards for checkpoint {checkpoint_id}"
+                ) from exc
+
+            manifest = CheckpointManifest(
+                checkpoint_id=checkpoint_id,
+                method=metadata.get("method", "unknown"),
+                timestamp=time.time(),
+                total_bytes=sum(t.nbytes for t in tensors.values()),
+                tensor_specs=tensor_specs,
+                metadata=metadata,
+            )
+            manifest_key = f"{self._prefix(checkpoint_id)}/_manifest.json"
+            try:
+                await s3.put_object(
+                    Bucket=self.bucket,
+                    Key=manifest_key,
+                    Body=json.dumps(manifest.to_dict()).encode(),
+                )
+            except Exception as exc:
+                raise CheckpointWriteError(
+                    f"Failed to write manifest for checkpoint {checkpoint_id}"
+                ) from exc
+
+            logger.info(
+                "Saved checkpoint %s (%.1f MB, %d tensors)",
+                checkpoint_id,
+                manifest.total_bytes / 1e6,
+                len(tensors),
+            )
+            return manifest
 
     async def load_checkpoint(
         self,
         checkpoint_id: str,
     ) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
-        raise NotImplementedError("S3ShardedStore.load_checkpoint — see ARCHITECTURE.md")
+        """Load tensors from S3, verifying per-shard checksums."""
+        session = aioboto3.Session()
+        async with session.client("s3", **self._client_kwargs()) as s3:
+            manifest_key = f"{self._prefix(checkpoint_id)}/_manifest.json"
+            try:
+                resp = await s3.get_object(Bucket=self.bucket, Key=manifest_key)
+                manifest_data = json.loads(await resp["Body"].read())
+            except ClientError as exc:
+                if exc.response["Error"]["Code"] == "NoSuchKey":
+                    raise CheckpointReadError(
+                        f"No manifest found for checkpoint {checkpoint_id}"
+                    ) from exc
+                raise CheckpointReadError(
+                    f"Failed to read manifest for checkpoint {checkpoint_id}"
+                ) from exc
 
-    async def list_checkpoints(self, prefix: str) -> list[dict[str, Any]]:
-        raise NotImplementedError("S3ShardedStore.list_checkpoints — see ARCHITECTURE.md")
+            manifest = CheckpointManifest.from_dict(manifest_data)
+            sem = asyncio.Semaphore(self.max_concurrency)
+            tensors: dict[str, np.ndarray] = {}
+
+            for name, spec in manifest.tensor_specs.items():
+                keys = [
+                    f"{self._prefix(checkpoint_id)}/{name}/shard-{i:04d}"
+                    for i in range(spec.num_shards)
+                ]
+                try:
+                    shard_bytes: tuple[bytes, ...] = await asyncio.gather(
+                        *[_get_with_sem(s3, sem, self.bucket, k) for k in keys]
+                    )
+                except ClientError as exc:
+                    raise CheckpointReadError(
+                        f"Failed to read shards for tensor {name} in checkpoint {checkpoint_id}"
+                    ) from exc
+
+                for i, (shard, expected) in enumerate(zip(shard_bytes, spec.checksums)):
+                    actual = xxhash.xxh64(shard).hexdigest()
+                    if actual != expected:
+                        raise CheckpointCorruptionError(
+                            f"Checksum mismatch for tensor {name} shard {i}: "
+                            f"{actual} != {expected}"
+                        )
+
+                raw = b"".join(shard_bytes)
+                tensors[name] = np.frombuffer(raw, dtype=spec.dtype).reshape(spec.shape)
+
+            return tensors, manifest.metadata
+
+    async def list_checkpoints(self, prefix: str = "") -> list[dict[str, Any]]:
+        """Return manifest dicts for all checkpoints matching the prefix, sorted by timestamp."""
+        session = aioboto3.Session()
+        async with session.client("s3", **self._client_kwargs()) as s3:
+            prefix_filter = f"{self.job_id}/ckpt/{prefix}"
+            paginator = s3.get_paginator("list_objects_v2")
+            manifest_keys: list[str] = []
+
+            async for page in paginator.paginate(Bucket=self.bucket, Prefix=prefix_filter):
+                for obj in page.get("Contents", []):
+                    if obj["Key"].endswith("/_manifest.json"):
+                        manifest_keys.append(obj["Key"])
+
+            results: list[dict[str, Any]] = []
+            for key in manifest_keys:
+                resp = await s3.get_object(Bucket=self.bucket, Key=key)
+                data = json.loads(await resp["Body"].read())
+                results.append(data)
+
+            return sorted(results, key=lambda d: d["timestamp"])
 
     async def delete_checkpoint(self, checkpoint_id: str) -> None:
-        raise NotImplementedError("S3ShardedStore.delete_checkpoint — see ARCHITECTURE.md")
+        """Delete all S3 objects under the checkpoint prefix."""
+        session = aioboto3.Session()
+        async with session.client("s3", **self._client_kwargs()) as s3:
+            paginator = s3.get_paginator("list_objects_v2")
+            keys_to_delete: list[str] = []
+
+            async for page in paginator.paginate(
+                Bucket=self.bucket, Prefix=f"{self._prefix(checkpoint_id)}/"
+            ):
+                for obj in page.get("Contents", []):
+                    keys_to_delete.append(obj["Key"])
+
+            for i in range(0, len(keys_to_delete), 1000):
+                batch = [{"Key": k} for k in keys_to_delete[i : i + 1000]]
+                if batch:
+                    await s3.delete_objects(Bucket=self.bucket, Delete={"Objects": batch})
+
+            logger.info("Deleted checkpoint %s (%d objects)", checkpoint_id, len(keys_to_delete))
