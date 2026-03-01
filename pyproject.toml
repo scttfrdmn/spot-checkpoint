@@ -65,6 +65,16 @@ strict = true
 warn_return_any = true
 warn_unused_configs = true
 
+[[tool.mypy.overrides]]
+# typer and rich are optional CLI deps — not installed in the base dev venv
+module = ["typer", "typer.*", "rich", "rich.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# Typer decorators are untyped when the package is absent; relax for cli module
+module = "spot_checkpoint.cli"
+disallow_untyped_decorators = false
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"

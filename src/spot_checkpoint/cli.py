@@ -15,12 +15,11 @@ import json
 import os
 import time
 from datetime import datetime
-from typing import Any, Optional
+from typing import Annotated, Any
 
 import typer
 from rich.console import Console
 from rich.table import Table
-from typing_extensions import Annotated
 
 from spot_checkpoint.gc import garbage_collect
 from spot_checkpoint.storage import LocalStore, S3ShardedStore
@@ -116,7 +115,7 @@ def info(
     location: Annotated[str, typer.Argument(help="Storage location (path or s3://bucket)")],
     job_id: Annotated[str, typer.Argument(help="Job identifier")],
     checkpoint_id: Annotated[
-        Optional[str], typer.Argument(help="Checkpoint ID (default: latest)")
+        str | None, typer.Argument(help="Checkpoint ID (default: latest)")
     ] = None,
     json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
 ) -> None:
@@ -179,7 +178,7 @@ def gc(
     location: Annotated[str, typer.Argument(help="Storage location (path or s3://bucket)")],
     job_id: Annotated[str, typer.Argument(help="Job identifier")],
     keep: Annotated[
-        Optional[int], typer.Option("--keep", "-k", help="Number of checkpoints to keep")
+        int | None, typer.Option("--keep", "-k", help="Number of checkpoints to keep")
     ] = None,
     json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
     dry_run: Annotated[

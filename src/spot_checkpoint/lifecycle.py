@@ -3,7 +3,8 @@ Spot Lifecycle Manager — interrupt detection and checkpoint orchestration.
 
 Three backends for three deployment models:
   1. SporeLifecycleBackend  — watches spored's signal file (/tmp/spawn-spot-interruption.json)
-  2. SlurmLifecycleBackend  — handles SIGTERM from Slurm's preemption, writes to SLURM_CHECKPOINT_DIR
+  2. SlurmLifecycleBackend  — handles SIGTERM from Slurm's preemption, writes to
+                              SLURM_CHECKPOINT_DIR
   3. DirectEC2Backend       — standalone metadata polling for bare EC2 (no spored, no Slurm)
 
 The lifecycle manager itself is backend-agnostic: it connects an interrupt signal
@@ -24,7 +25,7 @@ from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
-from typing import Any, Optional, TypeVar
+from typing import Any, TypeVar
 
 from spot_checkpoint.protocol import Checkpointable, CheckpointPayload, CheckpointStore
 
@@ -73,9 +74,8 @@ class LifecycleBackend(ABC):
     def stop(self) -> None:
         """Stop monitoring, release resources."""
 
-    def signal_completion(self) -> None:
+    def signal_completion(self) -> None:  # noqa: B027
         """Tell the environment that work is done (optional)."""
-        pass
 
 
 class SporeLifecycleBackend(LifecycleBackend):
@@ -103,9 +103,9 @@ class SporeLifecycleBackend(LifecycleBackend):
     ):
         self._poll_interval = poll_interval
         self._headroom = interrupt_headroom
-        self._on_interrupt: Optional[Callable[[InterruptEvent], None]] = None
+        self._on_interrupt: Callable[[InterruptEvent], None] | None = None
         self._stop_event = threading.Event()
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._already_fired = False
 
     def start(self, on_interrupt: Callable[[InterruptEvent], None]) -> None:
@@ -208,7 +208,7 @@ class SlurmLifecycleBackend(LifecycleBackend):
     ):
         self._grace_period = grace_period
         self._requeue = requeue
-        self._on_interrupt: Optional[Callable[[InterruptEvent], None]] = None
+        self._on_interrupt: Callable[[InterruptEvent], None] | None = None
         self._original_sigterm: Any = None
         self._original_sigusr1: Any = None
 
@@ -262,7 +262,7 @@ class SlurmLifecycleBackend(LifecycleBackend):
             self._on_interrupt(event)
 
     @staticmethod
-    def checkpoint_dir() -> Optional[Path]:
+    def checkpoint_dir() -> Path | None:
         """Get Slurm's configured checkpoint directory."""
         d = os.environ.get("SLURM_CHECKPOINT_DIR")
         if d:
@@ -308,10 +308,10 @@ class DirectEC2Backend(LifecycleBackend):
     ):
         self._poll_interval = poll_interval
         self._headroom = interrupt_headroom
-        self._on_interrupt: Optional[Callable[[InterruptEvent], None]] = None
+        self._on_interrupt: Callable[[InterruptEvent], None] | None = None
         self._stop_event = threading.Event()
-        self._thread: Optional[threading.Thread] = None
-        self._imds_token: Optional[str] = None
+        self._thread: threading.Thread | None = None
+        self._imds_token: str | None = None
         self._token_expiry: float = 0.0
 
     def start(self, on_interrupt: Callable[[InterruptEvent], None]) -> None:
@@ -334,7 +334,7 @@ class DirectEC2Backend(LifecycleBackend):
             self._thread.join(timeout=5)
         signal.signal(signal.SIGUSR1, signal.SIG_DFL)
 
-    def _get_imds_token(self) -> Optional[str]:
+    def _get_imds_token(self) -> str | None:
         """Request a fresh IMDSv2 session token from the metadata service.
 
         Returns:
@@ -348,7 +348,7 @@ class DirectEC2Backend(LifecycleBackend):
                 headers={"X-aws-ec2-metadata-token-ttl-seconds": str(self._TOKEN_TTL_SECONDS)},
             )
             with urllib.request.urlopen(req, timeout=2) as resp:
-                token: str = resp.read().decode()
+                token = str(resp.read().decode())
                 logger.debug("IMDSv2 token acquired (TTL=%ds)", self._TOKEN_TTL_SECONDS)
                 return token
         except Exception as exc:
@@ -471,7 +471,7 @@ class SpotLifecycleManager:
         self,
         store: CheckpointStore,
         adapter: Checkpointable,
-        backend: Optional[LifecycleBackend] = None,
+        backend: LifecycleBackend | None = None,
         periodic_interval: float = 300.0,
         checkpoint_id_prefix: str = "ckpt",
     ):
@@ -481,12 +481,12 @@ class SpotLifecycleManager:
         self.periodic_interval = periodic_interval
         self.checkpoint_id_prefix = checkpoint_id_prefix
 
-        self._interrupt_event: Optional[InterruptEvent] = None
+        self._interrupt_event: InterruptEvent | None = None
         self._last_checkpoint_time = 0.0
         self._checkpoint_count = 0
         self._lock = threading.Lock()
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
-        self._loop_thread: Optional[threading.Thread] = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._loop_thread: threading.Thread | None = None
 
     def __enter__(self) -> SpotLifecycleManager:
         self.start()
@@ -672,7 +672,7 @@ class SpotLifecycleManager:
 def spot_safe(
     solver: Any,
     bucket: str,
-    job_id: Optional[str] = None,
+    job_id: str | None = None,
     periodic_interval: float = 300,
     adapter_class: Any = None,
     **store_kwargs: Any,

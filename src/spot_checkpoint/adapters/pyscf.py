@@ -1,3 +1,4 @@
+# ruff: noqa: RUF002, RUF003  (× is intentional Unicode math in docstrings/comments)
 """
 PySCF checkpoint adapters — SCF, CCSD, CASSCF.
 
@@ -123,7 +124,7 @@ class SCFCheckpointAdapter:
     def checkpoint_size_estimate(self) -> int:
         nao = self.mf.mol.nao
         # mo_coeff (nao × nao) + mo_occ (nao) + mo_energy (nao), all float64
-        return nao * nao * 8 + nao * 8 * 2
+        return int(nao * nao * 8 + nao * 8 * 2)
 
 
 class CCSDCheckpointAdapter:
@@ -284,4 +285,4 @@ class CASSCFCheckpointAdapter:
                 else 0
             )
 
-        return mo_bytes + ci_bytes
+        return int(mo_bytes + ci_bytes)

@@ -15,11 +15,11 @@ import time
 from pathlib import Path
 from typing import Any, Literal
 
-import aioboto3
+import aioboto3  # type: ignore[import-untyped]
 import numpy as np
 import xxhash
-from botocore.config import Config
-from botocore.exceptions import ClientError
+from botocore.config import Config  # type: ignore[import-untyped]
+from botocore.exceptions import ClientError  # type: ignore[import-untyped]
 
 from spot_checkpoint.protocol import (
     CheckpointCorruptionError,
@@ -309,15 +309,17 @@ class S3ShardedStore:
                     for i in range(spec.num_shards)
                 ]
                 try:
-                    shard_bytes: tuple[bytes, ...] = await asyncio.gather(
+                    shard_bytes: list[bytes] = list(await asyncio.gather(
                         *[_get_with_sem(s3, sem, self.bucket, k) for k in keys]
-                    )
+                    ))
                 except ClientError as exc:
                     raise CheckpointReadError(
                         f"Failed to read shards for tensor {name} in checkpoint {checkpoint_id}"
                     ) from exc
 
-                for i, (shard, expected) in enumerate(zip(shard_bytes, spec.checksums)):
+                for i, (shard, expected) in enumerate(
+                    zip(shard_bytes, spec.checksums, strict=True)
+                ):
                     actual = xxhash.xxh64(shard).hexdigest()
                     if actual != expected:
                         raise CheckpointCorruptionError(

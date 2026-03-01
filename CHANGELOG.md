@@ -44,6 +44,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (resolves #16)
 
 ### Fixed
+- `lifecycle.py`: replaced all `Optional[X]` with `X | None` (UP045), removed
+  unused `Optional` import, suppressed intentional `B027` on
+  `signal_completion`, shortened over-length docstring line (resolves #19)
+- `lifecycle.py`: `_get_imds_token` return cast to `str(...)` — fixes
+  `no-any-return` under mypy `--strict`
+- `storage.py`: added `# type: ignore[import-untyped]` for aioboto3/botocore
+  imports; fixed `shard_bytes` annotation `tuple[bytes, ...]` → `list[bytes]`
+  to match `asyncio.gather` return; added `strict=True` to `zip()` (B905)
+  (resolves #20)
+- `adapters/pyscf.py`: cast `checkpoint_size_estimate` returns to `int(...)`
+  — fixes two `no-any-return` errors; suppressed `RUF002`/`RUF003` for
+  intentional `×` Unicode math in docstrings (resolves #20)
+- `__init__.py`: fixed import sort (I001); suppressed `RUF022` on `__all__`
+  (grouped by category, not alphabetically)
+- `cli.py`: updated `Annotated` import to `typing` (UP035); `Optional[X]` →
+  `X | None` (UP045)
+- `protocol.py`: fixed import sort (I001)
+- `pyproject.toml`: added mypy overrides — `ignore_missing_imports` for
+  optional `typer`/`rich` deps; `disallow_untyped_decorators = false` for
+  `cli` module
 - `SpotLifecycleManager` now runs its async event loop on a dedicated background
   daemon thread and uses `asyncio.run_coroutine_threadsafe` instead of
   `loop.run_until_complete` — fixes `RuntimeError: Cannot run the event loop while

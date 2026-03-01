@@ -12,27 +12,27 @@ Quick start:
 """
 
 from spot_checkpoint.lifecycle import (
-    SpotLifecycleManager,
-    spot_safe,
-    detect_backend,
-    SporeLifecycleBackend,
-    SlurmLifecycleBackend,
     DirectEC2Backend,
+    SlurmLifecycleBackend,
+    SporeLifecycleBackend,
+    SpotLifecycleManager,
+    detect_backend,
+    spot_safe,
 )
 from spot_checkpoint.protocol import (
-    CheckpointPayload,
     Checkpointable,
-    CheckpointStore,
-    SpotCheckpointError,
-    CheckpointWriteError,
-    CheckpointReadError,
     CheckpointCorruptionError,
+    CheckpointPayload,
+    CheckpointReadError,
+    CheckpointStore,
+    CheckpointWriteError,
+    SpotCheckpointError,
 )
-from spot_checkpoint.storage import S3ShardedStore, LocalStore
+from spot_checkpoint.storage import LocalStore, S3ShardedStore
 
 __version__ = "0.1.0"
 
-__all__ = [
+__all__ = [  # noqa: RUF022  (grouped by category, not alphabetically)
     # Top-level API
     "spot_safe",
     "SpotLifecycleManager",
