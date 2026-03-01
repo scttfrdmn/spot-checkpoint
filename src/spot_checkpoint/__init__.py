@@ -1,0 +1,56 @@
+"""
+spot-checkpoint: Fault-tolerant iterative computation on preemptible instances.
+
+Quick start:
+    from pyscf import gto, scf
+    from spot_checkpoint import spot_safe
+
+    mol = gto.M(atom='H 0 0 0; H 0 0 0.74', basis='aug-cc-pvtz')
+    mf = scf.RHF(mol)
+    mf.callback = spot_safe(mf, bucket="my-checkpoints")
+    mf.kernel()
+"""
+
+from spot_checkpoint.lifecycle import (
+    SpotLifecycleManager,
+    spot_safe,
+    detect_backend,
+    SporeLifecycleBackend,
+    SlurmLifecycleBackend,
+    DirectEC2Backend,
+)
+from spot_checkpoint.protocol import (
+    CheckpointPayload,
+    Checkpointable,
+    CheckpointStore,
+    SpotCheckpointError,
+    CheckpointWriteError,
+    CheckpointReadError,
+    CheckpointCorruptionError,
+)
+from spot_checkpoint.storage import S3ShardedStore, LocalStore
+
+__version__ = "0.1.0"
+
+__all__ = [
+    # Top-level API
+    "spot_safe",
+    "SpotLifecycleManager",
+    # Backends
+    "detect_backend",
+    "SporeLifecycleBackend",
+    "SlurmLifecycleBackend",
+    "DirectEC2Backend",
+    # Storage
+    "S3ShardedStore",
+    "LocalStore",
+    # Protocol
+    "CheckpointPayload",
+    "Checkpointable",
+    "CheckpointStore",
+    # Errors
+    "SpotCheckpointError",
+    "CheckpointWriteError",
+    "CheckpointReadError",
+    "CheckpointCorruptionError",
+]
