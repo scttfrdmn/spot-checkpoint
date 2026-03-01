@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-03-01
+
+### Added
+- `spot_safe()` / `spot_restore()`: `bucket` parameter now optional — falls back to
+  `SPOT_CHECKPOINT_BUCKET` env var; raises `ValueError` with clear message if missing (closes #29)
+- `SPOT_CHECKPOINT_INTERVAL`, `SPOT_CHECKPOINT_SHARD_SIZE`, `SPOT_CHECKPOINT_MAX_CONCURRENCY`
+  env vars read by `spot_safe()` / `spot_restore()` — zero-config scripts on configured hosts (closes #29)
+- `spot_safe_async()` and `spot_restore_async()` — async-native variants that `await` store
+  operations directly; safe in Jupyter notebooks, FastAPI, and other running event loops (closes #32)
+- `spot_safe_async` and `spot_restore_async` exported from `spot_checkpoint.__init__` (closes #32)
+- `spot-checkpoint validate LOCATION JOB_ID [CHECKPOINT_ID]` CLI subcommand — loads checkpoint
+  and re-verifies all per-tensor checksums; exits non-zero on corruption; `--json` output (closes #30)
+- `LocalStore`: optional `compress: bool = False` parameter — mirrors `S3ShardedStore` compression
+  behaviour; saves raw bytes as `{name}.bin.zst` (zstd level 3) and records `compression: "zstd"`
+  in manifest; load path auto-detects and decompresses (closes #31)
+- `tests/test_storage.py`: 4 LocalStore compression tests (closes #31)
+- `tests/test_cli.py`: 5 `validate` command tests (closes #30)
+- `README.md`: full documentation — install, quick start, env vars, CLI reference, architecture
+  overview (closes #27)
+- `.github/workflows/publish.yml`: PyPI publish workflow triggered on GitHub release; uses OIDC
+  trusted publisher (`pypa/gh-action-pypi-publish`); runs lint + typecheck + tests before build (closes #28)
+- `pyproject.toml`: added `typer>=0.9` and `rich>=13.0` to `dev` optional dependencies so CLI
+  tests run without installing the `cli` extra
+- `_env_int()` helper in `lifecycle.py` for reading integer environment variables
+
 ### Changed
 - `SCFCheckpointAdapter`: replaced manual numpy extraction of `mo_coeff`/`mo_occ`/`mo_energy`
   with PySCF's native `pyscf.scf.chkfile.dump_scf()` — stores a single HDF5 blob (`"chkfile"`
@@ -19,6 +44,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `tests/test_adapters_pyscf.py`: updated SCF tests — `test_checkpoint_roundtrip` checks
   `"chkfile"` key; `test_restore_roundtrip` and `test_scf_save_restore_via_store` call
   `mf.kernel()` after `restore_state()` then assert energy convergence
+- `pyproject.toml`: version bumped to `0.7.0`
+- `__init__.py`: `__version__` updated to `"0.7.0"`
 
 ## [0.6.0] - 2026-02-28
 
@@ -136,7 +163,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `docs/ARCHITECTURE.md`: full three-layer design spec with throughput math and open questions
 - `pyproject.toml`: `hatchling` build, `uv`-compatible dependency spec
 
-[Unreleased]: https://github.com/scttfrdmn/spot-checkpoint/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/scttfrdmn/spot-checkpoint/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/scttfrdmn/spot-checkpoint/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/scttfrdmn/spot-checkpoint/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/scttfrdmn/spot-checkpoint/compare/v0.1.0...v0.5.0
 [0.1.0]: https://github.com/scttfrdmn/spot-checkpoint/releases/tag/v0.1.0

@@ -2,19 +2,16 @@
 
 import json
 import os
-import threading
 import time
 from pathlib import Path
 from unittest.mock import patch
-
-import pytest
 
 from spot_checkpoint.lifecycle import (
     DirectEC2Backend,
     InterruptEvent,
     InterruptReason,
-    SporeLifecycleBackend,
     SlurmLifecycleBackend,
+    SporeLifecycleBackend,
     detect_backend,
 )
 
@@ -68,13 +65,17 @@ class TestSlurmLifecycleBackend:
 class TestDetectBackend:
     def test_fallback_to_direct_ec2(self):
         """Without Slurm or spored, falls back to DirectEC2Backend."""
-        with patch.dict(os.environ, {}, clear=True):
-            with patch("spot_checkpoint.lifecycle._spored_is_running", return_value=False):
-                backend = detect_backend()
-                assert isinstance(backend, DirectEC2Backend)
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch("spot_checkpoint.lifecycle._spored_is_running", return_value=False),
+        ):
+            backend = detect_backend()
+            assert isinstance(backend, DirectEC2Backend)
 
     def test_spored_detected(self):
-        with patch.dict(os.environ, {}, clear=True):
-            with patch("spot_checkpoint.lifecycle._spored_is_running", return_value=True):
-                backend = detect_backend()
-                assert isinstance(backend, SporeLifecycleBackend)
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch("spot_checkpoint.lifecycle._spored_is_running", return_value=True),
+        ):
+            backend = detect_backend()
+            assert isinstance(backend, SporeLifecycleBackend)

@@ -39,7 +39,7 @@ async def test_save_and_load_roundtrip(s3_store: S3ShardedStore) -> None:
 
 async def test_sharding_splits_large_tensor(s3_store: S3ShardedStore) -> None:
     """Tensor larger than shard_size (4KB) must produce multiple shard objects in S3."""
-    # 10 rows × 100 float64 = 8000 bytes > 4096 → at least 2 shards
+    # 10 rows x 100 float64 = 8000 bytes > 4096 -> at least 2 shards
     arr = np.ones((10, 100), dtype=np.float64)
 
     await s3_store.save_checkpoint("ckpt-sharded", {"data": arr}, {})
@@ -194,7 +194,9 @@ async def test_compressed_roundtrip(s3_store_compressed: S3ShardedStore) -> None
 
 
 @_needs_zstd
-async def test_compress_reduces_size(s3_store: S3ShardedStore, s3_store_compressed: S3ShardedStore) -> None:
+async def test_compress_reduces_size(
+    s3_store: S3ShardedStore, s3_store_compressed: S3ShardedStore
+) -> None:
     """Compressed checkpoint total S3 object size must be smaller than uncompressed."""
     # Use a compressible tensor (repeated pattern compresses well)
     arr = np.zeros((100, 100), dtype=np.float64)
@@ -239,7 +241,7 @@ async def test_compress_reduces_size(s3_store: S3ShardedStore, s3_store_compress
 @_needs_zstd
 @pytest.mark.parametrize("compress", [False, True])
 async def test_roundtrip_parameterized(moto_server: Any, compress: bool) -> None:
-    """Parameterized roundtrip: both compressed and uncompressed paths must produce identical tensors."""
+    """Parameterized roundtrip: compressed and uncompressed paths produce identical tensors."""
     endpoint_url = "http://127.0.0.1:5555"
     bucket = f"test-bucket-param-{int(compress)}"
     s3 = boto3.client(

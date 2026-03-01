@@ -68,11 +68,12 @@ class LocalStore:
         {base_dir}/{job_id}/ckpt/{checkpoint_id}/_manifest.json
     """
 
-    def __init__(self, base_dir: str | Path, job_id: str) -> None:
+    def __init__(self, base_dir: str | Path, job_id: str, compress: bool = False) -> None:
         self.base_dir = Path(base_dir)
         self.job_id = job_id
         self._ckpt_dir = self.base_dir / job_id / "ckpt"
         self._ckpt_dir.mkdir(parents=True, exist_ok=True)
+        self._compress = compress
 
     async def save_checkpoint(
         self,
@@ -87,11 +88,30 @@ class LocalStore:
         total_bytes = 0
 
         for name, tensor in tensors.items():
-            tensor_path = ckpt_path / f"{name}.npy"
-            np.save(str(tensor_path), tensor)
+            raw = tensor.tobytes()
+            checksum = xxhash.xxh64(raw).hexdigest()
             total_bytes += tensor.nbytes
 
-            checksum = xxhash.xxh64(tensor.tobytes()).hexdigest()
+            if self._compress:
+                try:
+                    import zstandard as zstd
+                except ImportError as exc:
+                    raise ImportError(
+                        "zstandard is required for compression: "
+                        "pip install spot-checkpoint[compress]"
+                    ) from exc
+                data = zstd.ZstdCompressor(level=3).compress(raw)
+                tensor_path = ckpt_path / f"{name}.bin.zst"
+            else:
+                data = raw
+                tensor_path = ckpt_path / f"{name}.npy"
+                # Use numpy save format for uncompressed (backward-compatible)
+                np.save(str(tensor_path), tensor)
+                data = None  # already written
+
+            if data is not None:
+                tensor_path.write_bytes(data)
+
             tensor_specs[name] = TensorSpec(
                 shape=tuple(tensor.shape),
                 dtype=str(tensor.dtype),
@@ -108,6 +128,7 @@ class LocalStore:
             total_bytes=total_bytes,
             tensor_specs=tensor_specs,
             metadata=metadata,
+            compression="zstd" if self._compress else None,
         )
 
         manifest_path = ckpt_path / "_manifest.json"
@@ -127,15 +148,30 @@ class LocalStore:
             raise CheckpointReadError(f"No manifest found for checkpoint {checkpoint_id}")
 
         manifest_data = json.loads(manifest_path.read_text())
+        use_decompress = manifest_data.get("compression") == "zstd"
         tensors: dict[str, np.ndarray] = {}
 
         for name, tm in manifest_data["tensor_specs"].items():
-            tensor_path = ckpt_path / f"{name}.npy"
-            if not tensor_path.exists():
-                raise CheckpointCorruptionError(f"Missing tensor file: {tensor_path}")
-            tensors[name] = np.load(str(tensor_path))
+            if use_decompress:
+                tensor_path = ckpt_path / f"{name}.bin.zst"
+                if not tensor_path.exists():
+                    raise CheckpointCorruptionError(f"Missing tensor file: {tensor_path}")
+                try:
+                    import zstandard as zstd
+                except ImportError as exc:
+                    raise ImportError(
+                        "zstandard is required for decompression: "
+                        "pip install spot-checkpoint[compress]"
+                    ) from exc
+                raw = zstd.ZstdDecompressor().decompress(tensor_path.read_bytes())
+                tensors[name] = np.frombuffer(raw, dtype=tm["dtype"]).reshape(tm["shape"])
+            else:
+                tensor_path = ckpt_path / f"{name}.npy"
+                if not tensor_path.exists():
+                    raise CheckpointCorruptionError(f"Missing tensor file: {tensor_path}")
+                tensors[name] = np.load(str(tensor_path))
 
-            # Verify checksum
+            # Verify checksum (always on raw bytes)
             actual = xxhash.xxh64(tensors[name].tobytes()).hexdigest()
             expected = tm["checksums"][0]
             if actual != expected:

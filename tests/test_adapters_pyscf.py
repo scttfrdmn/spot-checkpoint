@@ -1,9 +1,6 @@
 """Tests for PySCF adapters. Skipped if PySCF is not installed."""
 
-import io
-import tarfile
 import types
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -16,6 +13,7 @@ class TestSCFAdapter:
     def test_checkpoint_roundtrip(self):
         """Run small SCF, checkpoint, verify chkfile blob is stored."""
         from pyscf import gto, scf
+
         from spot_checkpoint.adapters.pyscf import SCFCheckpointAdapter
 
         mol = gto.M(atom="H 0 0 0; H 0 0 0.74", basis="sto-3g", verbose=0)
@@ -32,6 +30,7 @@ class TestSCFAdapter:
 
     def test_size_estimate(self):
         from pyscf import gto, scf
+
         from spot_checkpoint.adapters.pyscf import SCFCheckpointAdapter
 
         mol = gto.M(atom="H 0 0 0; H 0 0 0.74", basis="sto-3g", verbose=0)
@@ -45,6 +44,7 @@ class TestSCFAdapter:
     def test_restore_roundtrip(self):
         """Checkpoint after convergence, restore into fresh solver, verify energy matches."""
         from pyscf import gto, scf
+
         from spot_checkpoint.adapters.pyscf import SCFCheckpointAdapter
 
         mol = gto.M(atom="H 0 0 0; H 0 0 0.74", basis="sto-3g", verbose=0)
@@ -66,6 +66,7 @@ class TestSCFAdapter:
     def test_adapter_error_before_kernel(self):
         """checkpoint_state raises AdapterError if SCF has not been run."""
         from pyscf import gto, scf
+
         from spot_checkpoint.adapters.pyscf import SCFCheckpointAdapter
         from spot_checkpoint.protocol import AdapterError
 
@@ -81,6 +82,7 @@ class TestSCFAdapter:
     def test_metadata_fields(self):
         """Verify payload metadata contains expected fields with correct values."""
         from pyscf import gto, scf
+
         from spot_checkpoint.adapters.pyscf import SCFCheckpointAdapter
 
         mol = gto.M(atom="H 0 0 0; H 0 0 0.74", basis="sto-3g", verbose=0)
@@ -127,6 +129,7 @@ class TestCCSDAdapter:
     def test_restore_roundtrip(self):
         """Restore CCSD amplitudes into fresh solver; verify they match."""
         from pyscf import cc
+
         from spot_checkpoint.adapters.pyscf import CCSDCheckpointAdapter
 
         adapter = CCSDCheckpointAdapter(self.mycc)
@@ -142,6 +145,7 @@ class TestCCSDAdapter:
     def test_adapter_error_before_kernel(self):
         """checkpoint_state raises AdapterError if CCSD has not been run."""
         from pyscf import cc
+
         from spot_checkpoint.adapters.pyscf import CCSDCheckpointAdapter
         from spot_checkpoint.protocol import AdapterError
 
@@ -166,6 +170,7 @@ class TestCCSDAdapter:
     def test_size_estimate(self):
         """Size estimate should be positive and reasonable for H2/sto-3g."""
         from pyscf import cc
+
         from spot_checkpoint.adapters.pyscf import CCSDCheckpointAdapter
 
         mycc2 = cc.CCSD(self.mf)
@@ -207,6 +212,7 @@ class TestCASSCFAdapter:
     def test_restore_roundtrip(self):
         """Restore CASSCF state into fresh solver; verify mo_coeff and ci."""
         from pyscf import mcscf
+
         from spot_checkpoint.adapters.pyscf import CASSCFCheckpointAdapter
 
         adapter = CASSCFCheckpointAdapter(self.mc)
@@ -222,6 +228,7 @@ class TestCASSCFAdapter:
     def test_adapter_error_before_kernel(self):
         """checkpoint_state raises AdapterError if mo_coeff is None."""
         from pyscf import mcscf
+
         from spot_checkpoint.adapters.pyscf import CASSCFCheckpointAdapter
         from spot_checkpoint.protocol import AdapterError
 
@@ -249,6 +256,7 @@ class TestCASSCFAdapter:
     def test_size_estimate(self):
         """Size estimate should be positive and reasonable for H2 CAS(2,2)."""
         from pyscf import mcscf
+
         from spot_checkpoint.adapters.pyscf import CASSCFCheckpointAdapter
 
         mc2 = mcscf.CASSCF(self.mf, 2, 2)
@@ -264,6 +272,7 @@ class TestPySCFWithLocalStore:
     async def test_scf_save_restore_via_store(self, tmp_path):
         """Full pipeline: SCF → save_checkpoint → load_checkpoint → restore."""
         from pyscf import gto, scf
+
         from spot_checkpoint.adapters.pyscf import SCFCheckpointAdapter
         from spot_checkpoint.protocol import CheckpointPayload
         from spot_checkpoint.storage import LocalStore
@@ -294,6 +303,7 @@ class TestPySCFWithLocalStore:
     async def test_ccsd_save_restore_via_store(self, tmp_path):
         """Full pipeline: CCSD → save_checkpoint → load_checkpoint → restore."""
         from pyscf import cc, gto, scf
+
         from spot_checkpoint.adapters.pyscf import CCSDCheckpointAdapter
         from spot_checkpoint.protocol import CheckpointPayload
         from spot_checkpoint.storage import LocalStore
@@ -328,6 +338,7 @@ class TestCASSCFExternalSolver:
     @pytest.fixture(autouse=True)
     def setup_external_solver(self, tmp_path):
         from pyscf import gto, mcscf, scf
+
         from spot_checkpoint.adapters.pyscf import CASSCFCheckpointAdapter
 
         mol = gto.M(atom="H 0 0 0; H 0 0 0.74", basis="sto-3g", verbose=0)
@@ -365,6 +376,7 @@ class TestCASSCFExternalSolver:
     def test_restore_untars_to_path(self, tmp_path):
         """restore_state with ci_mps_tar payload extracts files to the recorded path."""
         from pyscf import mcscf
+
         from spot_checkpoint.adapters.pyscf import CASSCFCheckpointAdapter
         from spot_checkpoint.protocol import CheckpointPayload
 
@@ -404,7 +416,9 @@ class TestCASSCFExternalSolver:
     def test_graceful_skip_when_no_dir_found(self, caplog):
         """When ci is non-array and no MPS dir can be found, a warning is logged."""
         import logging
+
         from pyscf import mcscf
+
         from spot_checkpoint.adapters.pyscf import CASSCFCheckpointAdapter
 
         mc2 = mcscf.CASSCF(self.mf, 2, 2)

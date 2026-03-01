@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import pytest
@@ -18,7 +17,6 @@ import pytest
 from spot_checkpoint.lifecycle import SpotLifecycleManager
 from spot_checkpoint.protocol import CheckpointPayload
 from spot_checkpoint.storage import LocalStore
-
 
 # ---------------------------------------------------------------------------
 # Minimal fake solver + adapter (inline, no conftest dependency)

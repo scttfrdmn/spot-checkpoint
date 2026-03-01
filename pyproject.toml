@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "spot-checkpoint"
-version = "0.5.0"
+version = "0.7.0"
 description = "Checkpoint/restart for iterative scientific computations on preemptible cloud instances"
 readme = "README.md"
 license = "Apache-2.0"
@@ -44,6 +44,8 @@ dev = [
     "flask-cors>=4.0",
     "ruff>=0.4",
     "mypy>=1.10",
+    "typer>=0.9",
+    "rich>=13.0",
 ]
 
 [project.scripts]

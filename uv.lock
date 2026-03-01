@@ -1892,7 +1892,7 @@ wheels = [
 
 [[package]]
 name = "spot-checkpoint"
-version = "0.5.0"
+version = "0.7.0"
 source = { editable = "." }
 dependencies = [
     { name = "aioboto3" },
@@ -1916,7 +1916,9 @@ dev = [
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
+    { name = "rich" },
     { name = "ruff" },
+    { name = "typer" },
 ]
 pyscf = [
     { name = "pyscf" },
@@ -1941,8 +1943,10 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21" },
     { name = "rich", marker = "extra == 'cli'", specifier = ">=13.0" },
+    { name = "rich", marker = "extra == 'dev'", specifier = ">=13.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4" },
     { name = "typer", marker = "extra == 'cli'", specifier = ">=0.9" },
+    { name = "typer", marker = "extra == 'dev'", specifier = ">=0.9" },
     { name = "xxhash", specifier = ">=3.0" },
     { name = "zstandard", marker = "extra == 'compress'", specifier = ">=0.21" },
 ]

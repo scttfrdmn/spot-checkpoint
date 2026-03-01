@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 
 import numpy as np
-import pytest
 
 from spot_checkpoint.gc import garbage_collect
 from spot_checkpoint.storage import LocalStore

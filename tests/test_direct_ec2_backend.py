@@ -2,12 +2,9 @@
 
 import json
 import time
-from unittest.mock import MagicMock, call, patch
-
-import pytest
+from unittest.mock import patch
 
 from spot_checkpoint.lifecycle import DirectEC2Backend, InterruptEvent, InterruptReason
-
 
 # ---------------------------------------------------------------------------
 # Helpers

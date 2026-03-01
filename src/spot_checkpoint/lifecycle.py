@@ -669,22 +669,52 @@ class SpotLifecycleManager:
 # Convenience: top-level API for PySCF users
 # ---------------------------------------------------------------------------
 
+def _env_int(name: str, default: int) -> int:
+    """Read an integer environment variable, falling back to default."""
+    val = os.environ.get(name)
+    return int(val) if val is not None else default
+
+
 def spot_safe(
     solver: Any,
-    bucket: str,
+    bucket: str | None = None,
     job_id: str | None = None,
-    periodic_interval: float = 300,
+    periodic_interval: float | None = None,
     adapter_class: Any = None,
     **store_kwargs: Any,
 ) -> Callable[[dict[str, Any]], None]:
     """
     One-liner for making a PySCF solver spot-safe.
 
+    All parameters can be set via environment variables so scripts need
+    no hardcoded configuration:
+
+        SPOT_CHECKPOINT_BUCKET       — S3 bucket (required if bucket not passed)
+        SPOT_CHECKPOINT_INTERVAL     — periodic checkpoint interval in seconds (default 300)
+        SPOT_CHECKPOINT_SHARD_SIZE   — shard size in bytes (default 67108864 = 64 MB)
+        SPOT_CHECKPOINT_MAX_CONCURRENCY — parallel S3 streams (default 32)
+
     Usage:
         mf = scf.RHF(mol)
         mf.callback = spot_safe(mf, bucket="my-checkpoints")
         mf.kernel()
+
+        # Or with env vars set:
+        mf.callback = spot_safe(mf)
+        mf.kernel()
     """
+    if bucket is None:
+        bucket = os.environ.get("SPOT_CHECKPOINT_BUCKET")
+    if bucket is None:
+        raise ValueError(
+            "bucket is required. Pass it directly or set SPOT_CHECKPOINT_BUCKET."
+        )
+
+    if periodic_interval is None:
+        periodic_interval = float(
+            os.environ.get("SPOT_CHECKPOINT_INTERVAL", "300")
+        )
+
     if adapter_class is None:
         adapter_class = _detect_adapter_class(solver)
 
@@ -696,6 +726,13 @@ def spot_safe(
             or os.environ.get("SPAWN_INSTANCE_ID")
             or f"pyscf-{os.getpid()}"
         )
+
+    store_kwargs.setdefault(
+        "shard_size", _env_int("SPOT_CHECKPOINT_SHARD_SIZE", 64 * 1024 * 1024)
+    )
+    store_kwargs.setdefault(
+        "max_concurrency", _env_int("SPOT_CHECKPOINT_MAX_CONCURRENCY", 32)
+    )
 
     from spot_checkpoint.storage import S3ShardedStore
     store = S3ShardedStore(bucket=bucket, job_id=job_id, **store_kwargs)
@@ -710,7 +747,7 @@ def spot_safe(
 
 def spot_restore(
     solver: Any,
-    bucket: str,
+    bucket: str | None = None,
     job_id: str | None = None,
     checkpoint_id_prefix: str = "ckpt",
     adapter_class: Any = None,
@@ -718,15 +755,27 @@ def spot_restore(
 ) -> bool:
     """Restore a PySCF solver from the latest S3 checkpoint.
 
+    All parameters can be set via environment variables so scripts need
+    no hardcoded configuration:
+
+        SPOT_CHECKPOINT_BUCKET       — S3 bucket (required if bucket not passed)
+        SPOT_CHECKPOINT_SHARD_SIZE   — shard size in bytes (default 67108864 = 64 MB)
+        SPOT_CHECKPOINT_MAX_CONCURRENCY — parallel S3 streams (default 32)
+
     Usage:
         mf = scf.RHF(mol)
         restored = spot_restore(mf, bucket="my-checkpoints")
         mf.callback = spot_safe(mf, bucket="my-checkpoints")
         mf.kernel()
 
+        # Or with env vars set:
+        restored = spot_restore(mf)
+        mf.callback = spot_safe(mf)
+        mf.kernel()
+
     Args:
         solver: PySCF solver object to restore into.
-        bucket: S3 bucket name containing checkpoints.
+        bucket: S3 bucket name. Falls back to SPOT_CHECKPOINT_BUCKET env var.
         job_id: Job identifier scoping the checkpoints. Defaults to
             SLURM_JOB_ID, SPAWN_INSTANCE_ID, or ``pyscf-<pid>``.
         checkpoint_id_prefix: Prefix filter for checkpoint IDs (default: "ckpt").
@@ -737,6 +786,13 @@ def spot_restore(
     Returns:
         True if a checkpoint was found and restored, False if starting fresh.
     """
+    if bucket is None:
+        bucket = os.environ.get("SPOT_CHECKPOINT_BUCKET")
+    if bucket is None:
+        raise ValueError(
+            "bucket is required. Pass it directly or set SPOT_CHECKPOINT_BUCKET."
+        )
+
     if adapter_class is None:
         adapter_class = _detect_adapter_class(solver)
 
@@ -749,6 +805,13 @@ def spot_restore(
             or f"pyscf-{os.getpid()}"
         )
 
+    store_kwargs.setdefault(
+        "shard_size", _env_int("SPOT_CHECKPOINT_SHARD_SIZE", 64 * 1024 * 1024)
+    )
+    store_kwargs.setdefault(
+        "max_concurrency", _env_int("SPOT_CHECKPOINT_MAX_CONCURRENCY", 32)
+    )
+
     from spot_checkpoint.storage import S3ShardedStore
     store = S3ShardedStore(bucket=bucket, job_id=job_id, **store_kwargs)
     mgr = SpotLifecycleManager(
@@ -757,6 +820,93 @@ def spot_restore(
         checkpoint_id_prefix=checkpoint_id_prefix,
     )
     return asyncio.run(mgr.restore_latest())
+
+
+async def spot_safe_async(
+    solver: Any,
+    bucket: str | None = None,
+    job_id: str | None = None,
+    periodic_interval: float | None = None,
+    adapter_class: Any = None,
+    **store_kwargs: Any,
+) -> Callable[[dict[str, Any]], None]:
+    """Async-native version of spot_safe() for use inside running event loops.
+
+    Identical to spot_safe() but does not call asyncio.run() internally,
+    making it safe to use in Jupyter notebooks, FastAPI handlers, and any
+    other async framework.
+
+    Usage:
+        mf.callback = await spot_safe_async(mf, bucket="my-checkpoints")
+        mf.kernel()
+    """
+    # Delegate setup to spot_safe (sync parts only — store creation is cheap)
+    return spot_safe(
+        solver,
+        bucket=bucket,
+        job_id=job_id,
+        periodic_interval=periodic_interval,
+        adapter_class=adapter_class,
+        **store_kwargs,
+    )
+
+
+async def spot_restore_async(
+    solver: Any,
+    bucket: str | None = None,
+    job_id: str | None = None,
+    checkpoint_id_prefix: str = "ckpt",
+    adapter_class: Any = None,
+    **store_kwargs: Any,
+) -> bool:
+    """Async-native version of spot_restore() for use inside running event loops.
+
+    Identical to spot_restore() but awaits the store operations directly
+    instead of calling asyncio.run(), making it safe in Jupyter notebooks,
+    FastAPI handlers, and any other async framework.
+
+    Usage:
+        restored = await spot_restore_async(mf, bucket="my-checkpoints")
+        mf.callback = await spot_safe_async(mf, bucket="my-checkpoints")
+        mf.kernel()
+
+    Returns:
+        True if a checkpoint was found and restored, False if starting fresh.
+    """
+    if bucket is None:
+        bucket = os.environ.get("SPOT_CHECKPOINT_BUCKET")
+    if bucket is None:
+        raise ValueError(
+            "bucket is required. Pass it directly or set SPOT_CHECKPOINT_BUCKET."
+        )
+
+    if adapter_class is None:
+        adapter_class = _detect_adapter_class(solver)
+
+    adapter = adapter_class(solver)
+
+    if job_id is None:
+        job_id = (
+            os.environ.get("SLURM_JOB_ID")
+            or os.environ.get("SPAWN_INSTANCE_ID")
+            or f"pyscf-{os.getpid()}"
+        )
+
+    store_kwargs.setdefault(
+        "shard_size", _env_int("SPOT_CHECKPOINT_SHARD_SIZE", 64 * 1024 * 1024)
+    )
+    store_kwargs.setdefault(
+        "max_concurrency", _env_int("SPOT_CHECKPOINT_MAX_CONCURRENCY", 32)
+    )
+
+    from spot_checkpoint.storage import S3ShardedStore
+    store = S3ShardedStore(bucket=bucket, job_id=job_id, **store_kwargs)
+    mgr = SpotLifecycleManager(
+        store=store,
+        adapter=adapter,
+        checkpoint_id_prefix=checkpoint_id_prefix,
+    )
+    return await mgr.restore_latest()
 
 
 def _detect_adapter_class(solver: Any) -> type:

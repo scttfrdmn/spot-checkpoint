@@ -18,7 +18,9 @@ from spot_checkpoint.lifecycle import (
     SpotLifecycleManager,
     detect_backend,
     spot_restore,
+    spot_restore_async,
     spot_safe,
+    spot_safe_async,
 )
 from spot_checkpoint.protocol import (
     Checkpointable,
@@ -31,12 +33,14 @@ from spot_checkpoint.protocol import (
 )
 from spot_checkpoint.storage import LocalStore, S3ShardedStore
 
-__version__ = "0.5.0"
+__version__ = "0.7.0"
 
 __all__ = [  # noqa: RUF022  (grouped by category, not alphabetically)
     # Top-level API
     "spot_safe",
+    "spot_safe_async",
     "spot_restore",
+    "spot_restore_async",
     "SpotLifecycleManager",
     # Backends
     "detect_backend",

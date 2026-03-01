@@ -3,13 +3,9 @@
 No PySCF dependency — these helpers are pure Python/numpy/tarfile.
 """
 
-import io
-import tarfile
 import types
-from pathlib import Path
 
 import numpy as np
-import pytest
 
 from spot_checkpoint.adapters.pyscf import _find_mps_dir, _tar_directory, _untar_directory
 

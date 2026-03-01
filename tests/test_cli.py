@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import pytest
@@ -159,6 +158,39 @@ class TestGcCommand:
         assert "total" in data
         assert "kept" in data
         assert "deleted" in data
+
+
+class TestValidateCommand:
+    def test_validate_latest(self, populated_store: tuple[Path, str]) -> None:
+        path, job_id = populated_store
+        result = runner.invoke(app, ["validate", str(path), job_id])
+        assert result.exit_code == 0
+        assert "ckpt-003" in result.output
+        assert "OK" in result.output
+
+    def test_validate_specific(self, populated_store: tuple[Path, str]) -> None:
+        path, job_id = populated_store
+        result = runner.invoke(app, ["validate", str(path), job_id, "ckpt-001"])
+        assert result.exit_code == 0
+        assert "ckpt-001" in result.output
+
+    def test_validate_json(self, populated_store: tuple[Path, str]) -> None:
+        path, job_id = populated_store
+        result = runner.invoke(app, ["validate", "--json", str(path), job_id])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["ok"] is True
+        assert "tensors" in data
+        assert data["tensors"][0]["ok"] is True
+
+    def test_validate_empty_store(self, tmp_path: Path) -> None:
+        result = runner.invoke(app, ["validate", str(tmp_path), "no-such-job"])
+        assert result.exit_code == 1
+
+    def test_validate_not_found(self, populated_store: tuple[Path, str]) -> None:
+        path, job_id = populated_store
+        result = runner.invoke(app, ["validate", str(path), job_id, "nonexistent"])
+        assert result.exit_code == 1
 
 
 class TestBenchCommand:
