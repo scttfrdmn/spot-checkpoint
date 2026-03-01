@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from spot_checkpoint.protocol import CheckpointCorruptedError, CheckpointLoadError
+from spot_checkpoint.protocol import CheckpointCorruptionError, CheckpointReadError
 from spot_checkpoint.storage import LocalStore
 
 
@@ -54,7 +54,7 @@ async def test_delete_checkpoint(local_store: LocalStore):
 
 @pytest.mark.asyncio
 async def test_load_nonexistent_raises(local_store: LocalStore):
-    with pytest.raises(CheckpointLoadError):
+    with pytest.raises(CheckpointReadError):
         await local_store.load_checkpoint("nonexistent")
 
 

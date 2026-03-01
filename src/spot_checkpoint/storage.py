@@ -13,18 +13,16 @@ import asyncio
 import json
 import logging
 import os
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
 
 from spot_checkpoint.protocol import (
-    CheckpointCorruptedError,
-    CheckpointLoadError,
+    CheckpointCorruptionError,
     CheckpointManifest,
-    CheckpointSaveError,
-    TensorManifest,
+    CheckpointReadError,
+    TensorSpec,
 )
 
 logger = logging.getLogger(__name__)
@@ -57,7 +55,11 @@ class LocalStore:
         ckpt_path = self._ckpt_dir / checkpoint_id
         ckpt_path.mkdir(parents=True, exist_ok=True)
 
-        tensor_manifests: dict[str, TensorManifest] = {}
+        import time
+
+        import xxhash
+
+        tensor_specs: dict[str, TensorSpec] = {}
         total_bytes = 0
 
         for name, tensor in tensors.items():
@@ -65,39 +67,27 @@ class LocalStore:
             np.save(str(tensor_path), tensor)
             total_bytes += tensor.nbytes
 
-            import xxhash
             checksum = xxhash.xxh64(tensor.tobytes()).hexdigest()
-            tensor_manifests[name] = TensorManifest(
-                name=name,
+            tensor_specs[name] = TensorSpec(
                 shape=tuple(tensor.shape),
                 dtype=str(tensor.dtype),
+                nbytes=tensor.nbytes,
                 num_shards=1,
                 shard_size=tensor.nbytes,
                 checksums=[checksum],
             )
 
-        import time
         manifest = CheckpointManifest(
             checkpoint_id=checkpoint_id,
-            tensors=tensor_manifests,
-            metadata=metadata,
+            method=metadata.get("method", "unknown"),
             timestamp=time.time(),
             total_bytes=total_bytes,
-            shard_count=len(tensors),
+            tensor_specs=tensor_specs,
+            metadata=metadata,
         )
 
         manifest_path = ckpt_path / "_manifest.json"
-        manifest_data = {
-            "checkpoint_id": manifest.checkpoint_id,
-            "tensors": {
-                name: asdict(tm) for name, tm in manifest.tensors.items()
-            },
-            "metadata": manifest.metadata,
-            "timestamp": manifest.timestamp,
-            "total_bytes": manifest.total_bytes,
-            "shard_count": manifest.shard_count,
-        }
-        manifest_path.write_text(json.dumps(manifest_data, indent=2))
+        manifest_path.write_text(json.dumps(manifest.to_dict(), indent=2))
 
         logger.info("Saved checkpoint %s (%.1f MB)", checkpoint_id, total_bytes / 1e6)
         return manifest
@@ -110,23 +100,24 @@ class LocalStore:
         manifest_path = ckpt_path / "_manifest.json"
 
         if not manifest_path.exists():
-            raise CheckpointLoadError(f"No manifest found for checkpoint {checkpoint_id}")
+            raise CheckpointReadError(f"No manifest found for checkpoint {checkpoint_id}")
+
+        import xxhash
 
         manifest_data = json.loads(manifest_path.read_text())
         tensors: dict[str, np.ndarray] = {}
 
-        for name, tm in manifest_data["tensors"].items():
+        for name, tm in manifest_data["tensor_specs"].items():
             tensor_path = ckpt_path / f"{name}.npy"
             if not tensor_path.exists():
-                raise CheckpointCorruptedError(f"Missing tensor file: {tensor_path}")
+                raise CheckpointCorruptionError(f"Missing tensor file: {tensor_path}")
             tensors[name] = np.load(str(tensor_path))
 
             # Verify checksum
-            import xxhash
             actual = xxhash.xxh64(tensors[name].tobytes()).hexdigest()
             expected = tm["checksums"][0]
             if actual != expected:
-                raise CheckpointCorruptedError(
+                raise CheckpointCorruptionError(
                     f"Checksum mismatch for tensor {name}: {actual} != {expected}"
                 )
 

@@ -39,7 +39,6 @@ dev = [
     "moto[s3]>=5.0",
     "ruff>=0.4",
     "mypy>=1.10",
-    "numpy-stubs>=1.0",
 ]
 
 [project.scripts]

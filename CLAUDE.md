@@ -11,24 +11,43 @@ src/spot_checkpoint/
 ├── __init__.py        # exports: spot_safe, SpotLifecycleManager
 ├── storage.py         # Layer 1: S3ShardedStore, LocalStore
 ├── protocol.py        # Layer 2: Checkpointable, CheckpointPayload
-├── lifecycle.py       # Layer 3: backends + SpotLifecycleManager  [DONE]
+├── lifecycle.py       # Layer 3: backends + SpotLifecycleManager
 ├── gc.py              # Checkpoint garbage collection
 ├── adapters/
 │   └── pyscf.py       # SCF, CCSD, CASSCF adapters
 └── cli.py             # CLI (list, info, gc, bench)
 ```
 
-## Build Order
+## Project Tracking
 
-Implement in dependency order:
-1. `protocol.py` — dataclasses and protocols (no deps)
-2. `storage.py` — S3ShardedStore + LocalStore
-3. `adapters/pyscf.py` — PySCF wrappers
-4. `lifecycle.py` — already written, may need updates to import from protocol/storage
-5. `gc.py` — garbage collection
-6. `cli.py` — typer CLI
-7. `__init__.py` — public API surface
-8. Tests throughout
+All work is tracked on GitHub:
+
+- **Project board**: https://github.com/users/scttfrdmn/projects/30
+- **Issues**: https://github.com/scttfrdmn/spot-checkpoint/issues
+- **Milestones**: https://github.com/scttfrdmn/spot-checkpoint/milestones
+
+Use GitHub issues for all tasks, bugs, and enhancements. Do not maintain standalone tracking documents.
+
+### Milestones
+
+| Milestone | Scope |
+|-----------|-------|
+| v0.1.0 | Fix & Foundation — import fixes, LocalStore tests green, CHANGELOG |
+| v0.2.0 | S3 Backend — full S3ShardedStore with sharding + moto tests |
+| v0.3.0 | CLI & GC — typer CLI, gc tests, developer experience |
+| v0.4.0 | Integration — PySCF integration tests, 80%+ coverage |
+
+### Labels
+
+- Type: `bug`, `enhancement`, `testing`, `documentation`, `refactor`
+- Component: `component: storage`, `component: protocol`, `component: lifecycle`, `component: adapters`, `component: cli`, `component: gc`
+- Priority: `P1: critical`, `P2: high`, `P3: medium`
+
+## Versioning and Changelog
+
+- Versions follow [Semantic Versioning 2.0.0](https://semver.org/)
+- `CHANGELOG.md` follows [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/)
+- Update `CHANGELOG.md` with every PR under `[Unreleased]`; move to a version heading on release
 
 ## Python Standards
 
@@ -38,6 +57,15 @@ Implement in dependency order:
 - `ruff` for linting and formatting
 - `pytest` + `pytest-asyncio` for tests
 - Docstrings: Google style
+
+## Tooling
+
+- Use `uv` for all package management and running tools:
+  - `uv sync --extra dev` — install all dev dependencies
+  - `uv run pytest` — run tests
+  - `uv run ruff check .` — lint
+  - `uv run mypy src/` — type check
+- Never use `pip` or `python` directly — always `uv run` or `uv sync`
 
 ## Code Style
 
@@ -58,7 +86,7 @@ Implement in dependency order:
 ## Dependencies
 
 Required: `numpy`, `aioboto3`, `xxhash`
-Optional: `pyscf` (adapters only)
+Optional: `pyscf` (adapters only), `typer` + `rich` (CLI)
 Dev: `pytest`, `pytest-asyncio`, `moto[s3]`, `ruff`, `mypy`
 
 ## Key Design Decisions
@@ -76,6 +104,7 @@ Dev: `pytest`, `pytest-asyncio`, `moto[s3]`, `ruff`, `mypy`
 - Use `boto3` sync client in the storage engine — async throughout
 - Use SHA256 for checksums — xxhash for speed
 - Write monolithic S3 objects — always shard
+- Use `pip` or bare `python` — use `uv`
 
 ## References
 

@@ -34,6 +34,10 @@ class CheckpointCorruptionError(CheckpointReadError):
     """Checkpoint data failed integrity check."""
 
 
+class AdapterError(SpotCheckpointError):
+    """Adapter could not extract or restore solver state."""
+
+
 # ---------------------------------------------------------------------------
 # Checkpoint payload — the unit of persistence
 # ---------------------------------------------------------------------------

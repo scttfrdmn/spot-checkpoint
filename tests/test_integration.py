@@ -8,7 +8,7 @@ import pytest
 
 from spot_checkpoint.lifecycle import SpotLifecycleManager
 from spot_checkpoint.storage import LocalStore
-from tests.conftest import FakeCheckpointAdapter, FakeSolver
+from conftest import FakeCheckpointAdapter, FakeSolver
 
 
 @pytest.mark.asyncio
