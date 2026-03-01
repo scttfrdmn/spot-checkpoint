@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-02-28
+
 ### Added
 - `spot_restore()` convenience function in `lifecycle.py` — one-liner to restore a PySCF solver
   from the latest S3 checkpoint before calling `spot_safe()`; returns `True` if a checkpoint was
@@ -121,6 +123,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `docs/ARCHITECTURE.md`: full three-layer design spec with throughput math and open questions
 - `pyproject.toml`: `hatchling` build, `uv`-compatible dependency spec
 
-[Unreleased]: https://github.com/scttfrdmn/spot-checkpoint/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/scttfrdmn/spot-checkpoint/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/scttfrdmn/spot-checkpoint/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/scttfrdmn/spot-checkpoint/compare/v0.1.0...v0.5.0
 [0.1.0]: https://github.com/scttfrdmn/spot-checkpoint/releases/tag/v0.1.0
