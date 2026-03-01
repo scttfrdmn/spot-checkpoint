@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `tests/test_adapters_pyscf.py`: Expanded PySCF adapter test suite — 15 new tests covering SCF/CCSD/CASSCF restore roundtrips, AdapterError before kernel, metadata field assertions, size estimates, and end-to-end save/load via LocalStore (closes #13)
 - `cli.py`: Full typer CLI implementation — `list`, `info`, `gc`, `bench` subcommands with `--json` output; `_make_store` helper supports both local paths and `s3://` URIs (closes #11)
 - `tests/test_gc.py`: 8 tests for `garbage_collect()` covering empty store, no-keep, keep-N, keep ≥ total, keep-zero, keep-one, prefix forwarding, and return-dict shape (closes #5)
 - `tests/test_cli.py`: ~25 CLI tests using `typer.testing.CliRunner` across 5 test classes (TestHelp, TestListCommand, TestInfoCommand, TestGcCommand, TestBenchCommand) (closes #12)
