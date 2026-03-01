@@ -2,21 +2,297 @@
 CLI for spot-checkpoint management.
 
 Usage:
-    spot-checkpoint list --bucket my-bucket --job-id ccsd-h2o
-    spot-checkpoint info --bucket my-bucket --job-id ccsd-h2o
-    spot-checkpoint gc --bucket my-bucket --job-id ccsd-h2o --keep 3
+    spot-checkpoint list /path/to/store my-job
+    spot-checkpoint info /path/to/store my-job
+    spot-checkpoint gc /path/to/store my-job --keep 3
+    spot-checkpoint bench /tmp/bench --size-mb 256
 """
 
 from __future__ import annotations
 
-# TODO: Implement CLI using typer
-# This is a stub — full implementation follows the build order in CLAUDE.md
+import asyncio
+import json
+import os
+import time
+from datetime import datetime
+from typing import Any, Optional
+
+import typer
+from rich.console import Console
+from rich.table import Table
+from typing_extensions import Annotated
+
+from spot_checkpoint.gc import garbage_collect
+from spot_checkpoint.storage import LocalStore, S3ShardedStore
+
+app = typer.Typer(
+    name="spot-checkpoint",
+    help="Manage checkpoints for iterative scientific computations on preemptible instances.",
+    no_args_is_help=True,
+)
+console = Console()
+err_console = Console(stderr=True)
 
 
-def app() -> None:
-    """Spot-checkpoint CLI entry point."""
-    print("spot-checkpoint CLI — not yet implemented")
-    print("See CLAUDE.md build order: cli.py is step 6")
+def _make_store(location: str, job_id: str) -> LocalStore | S3ShardedStore:
+    """Create a store from a location string.
+
+    Args:
+        location: Local path or ``s3://bucket`` URI.
+        job_id: Job identifier scoping the checkpoints.
+
+    Returns:
+        A :class:`LocalStore` or :class:`S3ShardedStore` as appropriate.
+    """
+    if location.startswith("s3://"):
+        bucket = location.removeprefix("s3://").rstrip("/")
+        shard_size = int(os.environ.get("SPOT_CHECKPOINT_SHARD_SIZE", str(64 * 1024 * 1024)))
+        max_concurrency = int(os.environ.get("SPOT_CHECKPOINT_MAX_CONCURRENCY", "32"))
+        return S3ShardedStore(
+            bucket=bucket,
+            job_id=job_id,
+            shard_size=shard_size,
+            max_concurrency=max_concurrency,
+        )
+    return LocalStore(base_dir=location, job_id=job_id)
+
+
+def _fmt_size(nbytes: int) -> str:
+    if nbytes >= 1_000_000_000:
+        return f"{nbytes / 1e9:.2f} GB"
+    return f"{nbytes / 1e6:.2f} MB"
+
+
+@app.command("list")
+def list_checkpoints(
+    location: Annotated[str, typer.Argument(help="Storage location (path or s3://bucket)")],
+    job_id: Annotated[str, typer.Argument(help="Job identifier")],
+    json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
+) -> None:
+    """List all checkpoints for a job."""
+    store = _make_store(location, job_id)
+    checkpoints: list[dict[str, Any]] = asyncio.run(store.list_checkpoints(""))
+
+    if json_output:
+        output = [
+            {
+                "checkpoint_id": c["checkpoint_id"],
+                "method": c["method"],
+                "timestamp": c["timestamp"],
+                "total_bytes": c["total_bytes"],
+            }
+            for c in checkpoints
+        ]
+        typer.echo(json.dumps(output, indent=2))
+        return
+
+    if not checkpoints:
+        console.print("[yellow]No checkpoints found.[/yellow]")
+        return
+
+    table = Table(title=f"Checkpoints for {job_id}")
+    table.add_column("ID", style="cyan")
+    table.add_column("Method", style="green")
+    table.add_column("Timestamp", style="blue")
+    table.add_column("Size", justify="right", style="magenta")
+    table.add_column("Tensors", justify="right")
+
+    for c in checkpoints:
+        dt_str = datetime.fromtimestamp(c["timestamp"]).strftime("%Y-%m-%d %H:%M:%S")
+        n_tensors = len(c.get("tensor_specs", {}))
+        table.add_row(
+            c["checkpoint_id"],
+            c["method"],
+            dt_str,
+            _fmt_size(c["total_bytes"]),
+            str(n_tensors),
+        )
+
+    console.print(table)
+
+
+@app.command("info")
+def info(
+    location: Annotated[str, typer.Argument(help="Storage location (path or s3://bucket)")],
+    job_id: Annotated[str, typer.Argument(help="Job identifier")],
+    checkpoint_id: Annotated[
+        Optional[str], typer.Argument(help="Checkpoint ID (default: latest)")
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
+) -> None:
+    """Show details for a checkpoint (defaults to latest)."""
+    store = _make_store(location, job_id)
+
+    async def _get_manifest() -> dict[str, Any]:
+        checkpoints = await store.list_checkpoints("")
+        if not checkpoints:
+            return {}
+        if checkpoint_id is None:
+            return max(checkpoints, key=lambda c: c["timestamp"])
+        for c in checkpoints:
+            if c["checkpoint_id"] == checkpoint_id:
+                return c
+        return {}
+
+    manifest = asyncio.run(_get_manifest())
+
+    if not manifest:
+        err_console.print(
+            f"[red]Checkpoint not found: {checkpoint_id or '(latest)'}[/red]"
+        )
+        raise typer.Exit(1)
+
+    if json_output:
+        typer.echo(json.dumps(manifest, indent=2))
+        return
+
+    dt_str = datetime.fromtimestamp(manifest["timestamp"]).strftime("%Y-%m-%d %H:%M:%S")
+    console.print(f"[bold]Checkpoint ID:[/bold] {manifest['checkpoint_id']}")
+    console.print(f"[bold]Method:[/bold] {manifest['method']}")
+    console.print(f"[bold]Timestamp:[/bold] {dt_str}")
+    console.print(f"[bold]Size:[/bold] {_fmt_size(manifest['total_bytes'])}")
+
+    tensor_specs: dict[str, Any] = manifest.get("tensor_specs", {})
+    if tensor_specs:
+        table = Table(title="Tensors")
+        table.add_column("Name", style="cyan")
+        table.add_column("Shape", style="green")
+        table.add_column("DType", style="blue")
+        table.add_column("Size", justify="right", style="magenta")
+        table.add_column("Shards", justify="right")
+
+        for name, spec in tensor_specs.items():
+            shape_str = str(tuple(spec["shape"]))
+            table.add_row(
+                name,
+                shape_str,
+                spec["dtype"],
+                _fmt_size(spec["nbytes"]),
+                str(spec["num_shards"]),
+            )
+
+        console.print(table)
+
+
+@app.command("gc")
+def gc(
+    location: Annotated[str, typer.Argument(help="Storage location (path or s3://bucket)")],
+    job_id: Annotated[str, typer.Argument(help="Job identifier")],
+    keep: Annotated[
+        Optional[int], typer.Option("--keep", "-k", help="Number of checkpoints to keep")
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Show what would be deleted without deleting")
+    ] = False,
+) -> None:
+    """Garbage collect old checkpoints."""
+    store = _make_store(location, job_id)
+
+    if dry_run:
+        async def _dry_run_check() -> dict[str, Any]:
+            checkpoints = await store.list_checkpoints("")
+            total = len(checkpoints)
+            if keep is None or total <= keep:
+                to_delete: list[dict[str, Any]] = []
+                to_keep = checkpoints
+            else:
+                sorted_ckpts = sorted(checkpoints, key=lambda c: c.get("timestamp", 0))
+                to_delete = sorted_ckpts[: total - keep]
+                to_keep = sorted_ckpts[total - keep :]
+            return {
+                "total": total,
+                "would_delete": len(to_delete),
+                "would_keep": len(to_keep),
+                "checkpoints_to_delete": [c["checkpoint_id"] for c in to_delete],
+            }
+
+        result = asyncio.run(_dry_run_check())
+        if json_output:
+            typer.echo(json.dumps(result, indent=2))
+        else:
+            console.print(f"Total checkpoints: {result['total']}")
+            console.print(f"Would keep: {result['would_keep']}")
+            console.print(f"Would delete: {result['would_delete']}")
+            if result["checkpoints_to_delete"]:
+                console.print("Checkpoints to delete:")
+                for ckpt_id in result["checkpoints_to_delete"]:
+                    console.print(f"  {ckpt_id}")
+        return
+
+    result = asyncio.run(garbage_collect(store, prefix="", keep=keep))
+
+    if json_output:
+        typer.echo(json.dumps(result, indent=2))
+    else:
+        console.print(f"Total checkpoints: {result['total']}")
+        console.print(f"Kept: {result['kept']}")
+        console.print(f"Deleted: {result['deleted']}")
+
+
+@app.command("bench")
+def bench(
+    location: Annotated[str, typer.Argument(help="Storage location (path or s3://bucket)")],
+    job_id: Annotated[str, typer.Argument(help="Job identifier")] = "bench",
+    size_mb: Annotated[int, typer.Option("--size-mb", help="Tensor size in MB")] = 256,
+    concurrency: Annotated[
+        int, typer.Option("--concurrency", "-c", help="Max S3 concurrency")
+    ] = 32,
+    json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
+) -> None:
+    """Benchmark checkpoint write/read throughput."""
+    import numpy as np
+
+    store: LocalStore | S3ShardedStore
+    if location.startswith("s3://"):
+        bucket = location.removeprefix("s3://").rstrip("/")
+        shard_size = int(os.environ.get("SPOT_CHECKPOINT_SHARD_SIZE", str(64 * 1024 * 1024)))
+        store = S3ShardedStore(
+            bucket=bucket,
+            job_id=job_id,
+            shard_size=shard_size,
+            max_concurrency=concurrency,
+        )
+    else:
+        store = LocalStore(base_dir=location, job_id=job_id)
+
+    n_elements = (size_mb * 1024 * 1024) // 8  # float64 = 8 bytes each
+    tensor = np.random.rand(n_elements)
+    checkpoint_id = f"bench-{int(time.time())}"
+    metadata: dict[str, Any] = {"method": "bench"}
+
+    async def _run_bench() -> tuple[float, float]:
+        t0 = time.perf_counter()
+        await store.save_checkpoint(checkpoint_id, {"data": tensor}, metadata)
+        write_elapsed = time.perf_counter() - t0
+
+        t1 = time.perf_counter()
+        await store.load_checkpoint(checkpoint_id)
+        read_elapsed = time.perf_counter() - t1
+
+        await store.delete_checkpoint(checkpoint_id)
+        return write_elapsed, read_elapsed
+
+    write_elapsed, read_elapsed = asyncio.run(_run_bench())
+    write_mbps = size_mb / write_elapsed
+    read_mbps = size_mb / read_elapsed
+
+    result: dict[str, Any] = {
+        "size_mb": size_mb,
+        "write_mbps": round(write_mbps, 2),
+        "read_mbps": round(read_mbps, 2),
+        "write_elapsed_s": round(write_elapsed, 3),
+        "read_elapsed_s": round(read_elapsed, 3),
+        "concurrency": concurrency,
+    }
+
+    if json_output:
+        typer.echo(json.dumps(result, indent=2))
+    else:
+        console.print(f"Size:        {size_mb} MB")
+        console.print(f"Write:       {write_mbps:.1f} MB/s ({write_elapsed:.3f}s)")
+        console.print(f"Read:        {read_mbps:.1f} MB/s ({read_elapsed:.3f}s)")
+        console.print(f"Concurrency: {concurrency}")
 
 
 if __name__ == "__main__":

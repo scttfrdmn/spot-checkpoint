@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `cli.py`: Full typer CLI implementation — `list`, `info`, `gc`, `bench` subcommands with `--json` output; `_make_store` helper supports both local paths and `s3://` URIs (closes #11)
+- `tests/test_gc.py`: 8 tests for `garbage_collect()` covering empty store, no-keep, keep-N, keep ≥ total, keep-zero, keep-one, prefix forwarding, and return-dict shape (closes #5)
+- `tests/test_cli.py`: ~25 CLI tests using `typer.testing.CliRunner` across 5 test classes (TestHelp, TestListCommand, TestInfoCommand, TestGcCommand, TestBenchCommand) (closes #12)
 - `storage.py`: `S3ShardedStore` fully implemented — parallel sharded PUTs/GETs, manifest-last atomicity, xxhash checksums, batch deletes (closes #7, #8, #9, #10)
 - `storage.py`: `S3ShardedStore` gains optional `endpoint_url` parameter for custom/VPC endpoints and test overrides
 - `tests/test_storage_s3.py`: 8 tests covering roundtrip, sharding, corruption, missing manifest, prefix filtering, incomplete checkpoint exclusion, delete, and large tensor roundtrip
