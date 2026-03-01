@@ -15,6 +15,7 @@ import json
 import os
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Annotated, Any
 
 import typer
@@ -227,6 +228,103 @@ def gc(
         console.print(f"Total checkpoints: {result['total']}")
         console.print(f"Kept: {result['kept']}")
         console.print(f"Deleted: {result['deleted']}")
+
+
+@app.command("restore")
+def restore(
+    location: Annotated[str, typer.Argument(help="Storage location (path or s3://bucket)")],
+    job_id: Annotated[str, typer.Argument(help="Job identifier")],
+    checkpoint_id: Annotated[
+        str | None, typer.Option("--checkpoint-id", help="Specific checkpoint ID; default: latest")
+    ] = None,
+    output: Annotated[
+        str | None,
+        typer.Option("--output", "-o", help="Destination directory (default: ./{JOB_ID}-restored/)")
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
+) -> None:
+    """Restore checkpoint tensors to .npy files in an output directory."""
+    import numpy as np
+
+    store = _make_store(location, job_id)
+    output_dir = Path(output) if output else Path(f"./{job_id}-restored")
+
+    async def _restore() -> dict[str, Any]:
+        checkpoints = await store.list_checkpoints("")
+        if not checkpoints:
+            return {}
+        if checkpoint_id is None:
+            manifest = max(checkpoints, key=lambda c: c["timestamp"])
+        else:
+            matches = [c for c in checkpoints if c["checkpoint_id"] == checkpoint_id]
+            if not matches:
+                return {}
+            manifest = matches[0]
+
+        ckpt_id = manifest["checkpoint_id"]
+        tensors, metadata = await store.load_checkpoint(ckpt_id)
+        return {"manifest": manifest, "tensors": tensors, "metadata": metadata, "ckpt_id": ckpt_id}
+
+    result = asyncio.run(_restore())
+
+    if not result:
+        err_console.print(
+            f"[red]Checkpoint not found: {checkpoint_id or '(latest)'}[/red]"
+        )
+        raise typer.Exit(1)
+
+    tensors: dict[str, Any] = result["tensors"]
+    metadata: dict[str, Any] = result["metadata"]
+    ckpt_id: str = result["ckpt_id"]
+    manifest: dict[str, Any] = result["manifest"]
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    tensor_info = []
+    for name, arr in tensors.items():
+        npy_path = output_dir / f"{name}.npy"
+        np.save(str(npy_path), arr)
+        tensor_info.append({
+            "name": name,
+            "shape": list(arr.shape),
+            "dtype": str(arr.dtype),
+            "nbytes": arr.nbytes,
+            "file": str(npy_path),
+        })
+
+    meta_path = output_dir / "metadata.json"
+    meta_path.write_text(json.dumps(metadata, indent=2))
+
+    if json_output:
+        typer.echo(json.dumps({
+            "checkpoint_id": ckpt_id,
+            "output_dir": str(output_dir),
+            "tensors": tensor_info,
+            "metadata": metadata,
+        }, indent=2))
+        return
+
+    console.print(f"[bold]Checkpoint ID:[/bold] {ckpt_id}")
+    dt_str = datetime.fromtimestamp(manifest["timestamp"]).strftime("%Y-%m-%d %H:%M:%S")
+    console.print(f"[bold]Timestamp:[/bold] {dt_str}")
+    console.print(f"[bold]Output:[/bold] {output_dir}")
+
+    table = Table(title="Restored Tensors")
+    table.add_column("Name", style="cyan")
+    table.add_column("Shape", style="green")
+    table.add_column("DType", style="blue")
+    table.add_column("Size", justify="right", style="magenta")
+
+    for info in tensor_info:
+        table.add_row(
+            info["name"],
+            str(tuple(info["shape"])),
+            info["dtype"],
+            _fmt_size(info["nbytes"]),
+        )
+
+    console.print(table)
+    console.print(f"[green]metadata.json written to {meta_path}[/green]")
 
 
 @app.command("bench")

@@ -191,10 +191,11 @@ class CheckpointManifest:
     total_bytes: int
     tensor_specs: dict[str, TensorSpec]
     metadata: dict[str, Any]
+    compression: str | None = None  # "zstd" | None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to JSON-compatible dict."""
-        return {
+        d: dict[str, Any] = {
             "checkpoint_id": self.checkpoint_id,
             "method": self.method,
             "timestamp": self.timestamp,
@@ -204,6 +205,9 @@ class CheckpointManifest:
             },
             "metadata": self.metadata,
         }
+        if self.compression is not None:
+            d["compression"] = self.compression
+        return d
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> CheckpointManifest:
@@ -218,6 +222,7 @@ class CheckpointManifest:
                 for name, spec in data["tensor_specs"].items()
             },
             metadata=data["metadata"],
+            compression=data.get("compression"),
         )
 
 

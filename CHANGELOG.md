@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `spot_restore()` convenience function in `lifecycle.py` — one-liner to restore a PySCF solver
+  from the latest S3 checkpoint before calling `spot_safe()`; returns `True` if a checkpoint was
+  found and restored, `False` for a fresh start (closes #22)
+- `spot_restore` exported from `spot_checkpoint.__init__` (closes #22)
+- CLI `restore` subcommand — `spot-checkpoint restore LOCATION JOB_ID` dumps tensors as `.npy`
+  files and `metadata.json` to an output directory; supports `--checkpoint-id`, `--output`,
+  `--json` flags (closes #23)
+- `examples/restore_and_continue_scf.py` — canonical two-call pattern showing `spot_restore()`
+  followed by `spot_safe()` (closes #24)
+- `tests/test_restore_roundtrip.py` — 4 round-trip integration tests using `LocalStore`:
+  no-checkpoint returns False, latest selected from two checkpoints, specific state recovered,
+  full cycle with periodic checkpoint + restore (closes #25)
+- `S3ShardedStore` optional `compress: bool = False` parameter — compresses shards with zstd
+  level 3 before upload; manifest records `"compression": "zstd"`; load path auto-decompresses
+  based on manifest field (closes #26)
+- `CheckpointManifest.compression: str | None` field — backwards compatible (missing key → None)
+  (closes #26)
+- `pyproject.toml`: `compress = ["zstandard>=0.21"]` optional dependency extra (closes #26)
+- `tests/test_storage_s3.py`: 3 compression tests — `test_compressed_roundtrip`,
+  `test_compress_reduces_size`, `test_roundtrip_parameterized` (closes #26)
+
+### Fixed
+- `pyproject.toml`: version bumped from `0.1.0` to `0.5.0` to match the actual release state
+  (closes #21)
+- `__init__.py`: `__version__` string updated to `"0.5.0"` (closes #21)
+- `examples/slurm_submit.sh`: removed misleading comment claiming restore is automatic; added
+  explicit note that `spot_restore()` must be called in the Python script (closes #24)
+
 ## [0.5.0] - 2026-02-28
 
 ### Added

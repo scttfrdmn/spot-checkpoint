@@ -190,6 +190,7 @@ class S3ShardedStore:
         endpoint_strategy: Literal["standard", "accelerate", "vpc"] = "vpc",
         region: str | None = None,
         endpoint_url: str | None = None,
+        compress: bool = False,
     ) -> None:
         self.bucket = bucket
         self.job_id = job_id
@@ -198,6 +199,7 @@ class S3ShardedStore:
         self.endpoint_strategy = endpoint_strategy
         self.region = region
         self.endpoint_url = endpoint_url
+        self._compress = compress
 
     def _prefix(self, checkpoint_id: str) -> str:
         return f"{self.job_id}/ckpt/{checkpoint_id}"
@@ -215,6 +217,28 @@ class S3ShardedStore:
     def _shard_bytes(self, data: bytes) -> list[bytes]:
         return [data[i : i + self.shard_size] for i in range(0, len(data), self.shard_size)]
 
+    @staticmethod
+    def _compress_shard(data: bytes) -> bytes:
+        """Compress shard bytes with zstd level 3."""
+        try:
+            import zstandard as zstd
+        except ImportError as exc:
+            raise ImportError(
+                "zstandard is required for compression: pip install spot-checkpoint[compress]"
+            ) from exc
+        return zstd.ZstdCompressor(level=3).compress(data)
+
+    @staticmethod
+    def _decompress_shard(data: bytes) -> bytes:
+        """Decompress zstd-compressed shard bytes."""
+        try:
+            import zstandard as zstd
+        except ImportError as exc:
+            raise ImportError(
+                "zstandard is required for decompression: pip install spot-checkpoint[compress]"
+            ) from exc
+        return zstd.ZstdDecompressor().decompress(data)
+
     async def save_checkpoint(
         self,
         checkpoint_id: str,
@@ -231,6 +255,7 @@ class S3ShardedStore:
             for name, tensor in tensors.items():
                 raw = tensor.tobytes()
                 shards = self._shard_bytes(raw)
+                # Checksums are computed on raw (pre-compression) bytes for integrity
                 checksums = [xxhash.xxh64(s).hexdigest() for s in shards]
                 tensor_specs[name] = TensorSpec(
                     shape=tuple(tensor.shape),
@@ -241,8 +266,9 @@ class S3ShardedStore:
                     checksums=checksums,
                 )
                 for i, shard in enumerate(shards):
+                    body = self._compress_shard(shard) if self._compress else shard
                     key = f"{self._prefix(checkpoint_id)}/{name}/shard-{i:04d}"
-                    all_puts.append(_put_with_sem(s3, sem, self.bucket, key, shard))
+                    all_puts.append(_put_with_sem(s3, sem, self.bucket, key, body))
 
             try:
                 await asyncio.gather(*all_puts)
@@ -258,6 +284,7 @@ class S3ShardedStore:
                 total_bytes=sum(t.nbytes for t in tensors.values()),
                 tensor_specs=tensor_specs,
                 metadata=metadata,
+                compression="zstd" if self._compress else None,
             )
             manifest_key = f"{self._prefix(checkpoint_id)}/_manifest.json"
             try:
@@ -302,6 +329,7 @@ class S3ShardedStore:
             manifest = CheckpointManifest.from_dict(manifest_data)
             sem = asyncio.Semaphore(self.max_concurrency)
             tensors: dict[str, np.ndarray] = {}
+            use_decompress = manifest.compression == "zstd"
 
             for name, spec in manifest.tensor_specs.items():
                 keys = [
@@ -316,6 +344,9 @@ class S3ShardedStore:
                     raise CheckpointReadError(
                         f"Failed to read shards for tensor {name} in checkpoint {checkpoint_id}"
                     ) from exc
+
+                if use_decompress:
+                    shard_bytes = [self._decompress_shard(s) for s in shard_bytes]
 
                 for i, (shard, expected) in enumerate(
                     zip(shard_bytes, spec.checksums, strict=True)

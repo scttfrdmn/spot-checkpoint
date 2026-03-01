@@ -708,6 +708,57 @@ def spot_safe(
     return mgr.make_callback()
 
 
+def spot_restore(
+    solver: Any,
+    bucket: str,
+    job_id: str | None = None,
+    checkpoint_id_prefix: str = "ckpt",
+    adapter_class: Any = None,
+    **store_kwargs: Any,
+) -> bool:
+    """Restore a PySCF solver from the latest S3 checkpoint.
+
+    Usage:
+        mf = scf.RHF(mol)
+        restored = spot_restore(mf, bucket="my-checkpoints")
+        mf.callback = spot_safe(mf, bucket="my-checkpoints")
+        mf.kernel()
+
+    Args:
+        solver: PySCF solver object to restore into.
+        bucket: S3 bucket name containing checkpoints.
+        job_id: Job identifier scoping the checkpoints. Defaults to
+            SLURM_JOB_ID, SPAWN_INSTANCE_ID, or ``pyscf-<pid>``.
+        checkpoint_id_prefix: Prefix filter for checkpoint IDs (default: "ckpt").
+        adapter_class: Explicit adapter class; auto-detected if None.
+        **store_kwargs: Extra keyword arguments passed to S3ShardedStore
+            (e.g. ``region``, ``endpoint_url``).
+
+    Returns:
+        True if a checkpoint was found and restored, False if starting fresh.
+    """
+    if adapter_class is None:
+        adapter_class = _detect_adapter_class(solver)
+
+    adapter = adapter_class(solver)
+
+    if job_id is None:
+        job_id = (
+            os.environ.get("SLURM_JOB_ID")
+            or os.environ.get("SPAWN_INSTANCE_ID")
+            or f"pyscf-{os.getpid()}"
+        )
+
+    from spot_checkpoint.storage import S3ShardedStore
+    store = S3ShardedStore(bucket=bucket, job_id=job_id, **store_kwargs)
+    mgr = SpotLifecycleManager(
+        store=store,
+        adapter=adapter,
+        checkpoint_id_prefix=checkpoint_id_prefix,
+    )
+    return asyncio.run(mgr.restore_latest())
+
+
 def _detect_adapter_class(solver: Any) -> type:
     """Map PySCF solver object → checkpoint adapter class."""
     mro_names = [cls.__name__ for cls in type(solver).__mro__]

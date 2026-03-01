@@ -135,3 +135,144 @@ async def test_large_sharded_roundtrip(s3_store: S3ShardedStore) -> None:
     tensors, meta = await s3_store.load_checkpoint("ckpt-large")
     np.testing.assert_array_equal(tensors["mo_coeff"], arr)
     assert meta["method"] == "casscf"
+
+
+# ---------------------------------------------------------------------------
+# Compression tests (skip if zstandard not installed)
+# ---------------------------------------------------------------------------
+
+_needs_zstd = pytest.mark.skipif(
+    __import__("importlib").util.find_spec("zstandard") is None,
+    reason="zstandard not installed",
+)
+
+
+@pytest.fixture
+async def s3_store_compressed(moto_server: Any) -> Any:
+    """S3ShardedStore with compress=True, backed by ThreadedMotoServer."""
+    endpoint_url = "http://127.0.0.1:5555"
+    s3 = boto3.client(
+        "s3",
+        region_name="us-east-1",
+        endpoint_url=endpoint_url,
+        aws_access_key_id="testing",
+        aws_secret_access_key="testing",
+    )
+    bucket = "test-bucket-compressed"
+    s3.create_bucket(Bucket=bucket)
+    store = S3ShardedStore(
+        bucket=bucket,
+        job_id="test-job",
+        shard_size=4 * 1024,
+        region="us-east-1",
+        endpoint_url=endpoint_url,
+        compress=True,
+    )
+    yield store
+    response = s3.list_objects_v2(Bucket=bucket)
+    objects = [{"Key": obj["Key"]} for obj in response.get("Contents", [])]
+    if objects:
+        s3.delete_objects(Bucket=bucket, Delete={"Objects": objects})
+    s3.delete_bucket(Bucket=bucket)
+
+
+@_needs_zstd
+async def test_compressed_roundtrip(s3_store_compressed: S3ShardedStore) -> None:
+    """Save with compress=True, load, verify tensors and metadata match exactly."""
+    arr = np.random.default_rng(0).standard_normal((20, 20)).astype(np.float64)
+    metadata = {"method": "ccsd", "iteration": 10}
+
+    manifest = await s3_store_compressed.save_checkpoint(
+        "ckpt-compressed-001", {"t2": arr}, metadata
+    )
+    assert manifest.compression == "zstd"
+
+    tensors, meta = await s3_store_compressed.load_checkpoint("ckpt-compressed-001")
+    np.testing.assert_array_equal(tensors["t2"], arr)
+    assert meta["iteration"] == 10
+    assert meta["method"] == "ccsd"
+
+
+@_needs_zstd
+async def test_compress_reduces_size(s3_store: S3ShardedStore, s3_store_compressed: S3ShardedStore) -> None:
+    """Compressed checkpoint total S3 object size must be smaller than uncompressed."""
+    # Use a compressible tensor (repeated pattern compresses well)
+    arr = np.zeros((100, 100), dtype=np.float64)
+
+    manifest_raw = await s3_store.save_checkpoint("ckpt-raw-size", {"data": arr}, {})
+    manifest_cmp = await s3_store_compressed.save_checkpoint("ckpt-cmp-size", {"data": arr}, {})
+
+    # The raw byte count in the manifest is the same (uncompressed logical size)
+    assert manifest_raw.total_bytes == manifest_cmp.total_bytes
+
+    # But compressed objects on S3 should be smaller — verify via listing object sizes
+    raw_client = boto3.client(
+        "s3",
+        region_name="us-east-1",
+        endpoint_url=s3_store.endpoint_url,
+        aws_access_key_id="testing",
+        aws_secret_access_key="testing",
+    )
+    cmp_client = boto3.client(
+        "s3",
+        region_name="us-east-1",
+        endpoint_url=s3_store_compressed.endpoint_url,
+        aws_access_key_id="testing",
+        aws_secret_access_key="testing",
+    )
+
+    raw_resp = raw_client.list_objects_v2(
+        Bucket=s3_store.bucket, Prefix="test-job/ckpt/ckpt-raw-size/"
+    )
+    cmp_resp = cmp_client.list_objects_v2(
+        Bucket=s3_store_compressed.bucket, Prefix="test-job/ckpt/ckpt-cmp-size/"
+    )
+
+    raw_total = sum(obj["Size"] for obj in raw_resp.get("Contents", []))
+    cmp_total = sum(obj["Size"] for obj in cmp_resp.get("Contents", []))
+
+    assert cmp_total < raw_total, (
+        f"Compressed ({cmp_total}B) should be smaller than raw ({raw_total}B)"
+    )
+
+
+@_needs_zstd
+@pytest.mark.parametrize("compress", [False, True])
+async def test_roundtrip_parameterized(moto_server: Any, compress: bool) -> None:
+    """Parameterized roundtrip: both compressed and uncompressed paths must produce identical tensors."""
+    endpoint_url = "http://127.0.0.1:5555"
+    bucket = f"test-bucket-param-{int(compress)}"
+    s3 = boto3.client(
+        "s3",
+        region_name="us-east-1",
+        endpoint_url=endpoint_url,
+        aws_access_key_id="testing",
+        aws_secret_access_key="testing",
+    )
+    s3.create_bucket(Bucket=bucket)
+
+    store = S3ShardedStore(
+        bucket=bucket,
+        job_id="test-job",
+        shard_size=4 * 1024,
+        region="us-east-1",
+        endpoint_url=endpoint_url,
+        compress=compress,
+    )
+
+    arr = np.random.default_rng(99).standard_normal((8, 8)).astype(np.float32)
+    metadata = {"method": "rhf", "converged": True}
+
+    manifest = await store.save_checkpoint("ckpt-param", {"weights": arr}, metadata)
+    assert manifest.compression == ("zstd" if compress else None)
+
+    tensors, meta = await store.load_checkpoint("ckpt-param")
+    np.testing.assert_array_equal(tensors["weights"], arr)
+    assert meta["converged"] is True
+
+    # Cleanup
+    response = s3.list_objects_v2(Bucket=bucket)
+    objects = [{"Key": obj["Key"]} for obj in response.get("Contents", [])]
+    if objects:
+        s3.delete_objects(Bucket=bucket, Delete={"Objects": objects})
+    s3.delete_bucket(Bucket=bucket)

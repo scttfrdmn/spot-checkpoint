@@ -17,7 +17,14 @@
 #   SIGTERM → emergency checkpoint + scontrol requeue
 #   SIGUSR1 → checkpoint before wall-time expiry
 #
-# On restart, the script picks up from the last checkpoint automatically.
+# IMPORTANT: Restore is NOT automatic. Your Python script must call
+# spot_restore() before spot_safe() to reload from the last checkpoint.
+# See examples/restore_and_continue_scf.py for the two-call pattern:
+#
+#   from spot_checkpoint import spot_restore, spot_safe
+#   spot_restore(solver, bucket=os.environ["SPOT_CHECKPOINT_BUCKET"])
+#   solver.callback = spot_safe(solver, bucket=os.environ["SPOT_CHECKPOINT_BUCKET"])
+#   solver.kernel()
 
 module load python/3.11
 source ~/venvs/pyscf/bin/activate
