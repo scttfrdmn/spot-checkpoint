@@ -160,6 +160,32 @@ class TestGcCommand:
         assert "deleted" in data
 
 
+class TestStatusCommand:
+    def test_status_latest(self, populated_store: tuple[Path, str]) -> None:
+        """status shows the latest checkpoint's info table, exits 0."""
+        path, job_id = populated_store
+        result = runner.invoke(app, ["status", str(path), job_id])
+        assert result.exit_code == 0
+        # ckpt-003 has highest timestamp
+        assert "ckpt-003" in result.output
+
+    def test_status_json(self, populated_store: tuple[Path, str]) -> None:
+        """status --json emits a dict with required keys, exits 0."""
+        path, job_id = populated_store
+        result = runner.invoke(app, ["status", "--json", str(path), job_id])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert "checkpoint_id" in data
+        assert "method" in data
+        assert "timestamp" in data
+        assert "total_bytes" in data
+
+    def test_status_empty_store(self, tmp_path: Path) -> None:
+        """status exits with code 1 when no checkpoints exist."""
+        result = runner.invoke(app, ["status", str(tmp_path), "no-such-job"])
+        assert result.exit_code == 1
+
+
 class TestValidateCommand:
     def test_validate_latest(self, populated_store: tuple[Path, str]) -> None:
         path, job_id = populated_store

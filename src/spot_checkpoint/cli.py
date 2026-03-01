@@ -174,6 +174,45 @@ def info(
         console.print(table)
 
 
+@app.command("status")
+def status(
+    location: Annotated[str, typer.Argument(help="Storage location (path or s3://bucket)")],
+    job_id: Annotated[str, typer.Argument(help="Job identifier")],
+    json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
+) -> None:
+    """Show metadata of the latest checkpoint without loading tensors."""
+    from spot_checkpoint.lifecycle import _status_from_store
+
+    store = _make_store(location, job_id)
+    result = asyncio.run(_status_from_store(store, ""))
+
+    if result is None:
+        err_console.print("[red]No checkpoints found.[/red]")
+        raise typer.Exit(1)
+
+    if json_output:
+        typer.echo(json.dumps(result, indent=2))
+        return
+
+    dt_str = datetime.fromtimestamp(result["timestamp"]).strftime("%Y-%m-%d %H:%M:%S")
+    console.print(f"[bold]Checkpoint ID:[/bold] {result['checkpoint_id']}")
+    console.print(f"[bold]Method:[/bold] {result['method']}")
+    console.print(f"[bold]Timestamp:[/bold] {dt_str}")
+    console.print(f"[bold]Size:[/bold] {_fmt_size(result['total_bytes'])}")
+
+    meta_keys = {
+        k for k in result
+        if k not in ("checkpoint_id", "method", "timestamp", "total_bytes")
+    }
+    if meta_keys:
+        table = Table(title="Metadata")
+        table.add_column("Key", style="cyan")
+        table.add_column("Value", style="green")
+        for key in sorted(meta_keys):
+            table.add_row(key, str(result[key]))
+        console.print(table)
+
+
 @app.command("gc")
 def gc(
     location: Annotated[str, typer.Argument(help="Storage location (path or s3://bucket)")],

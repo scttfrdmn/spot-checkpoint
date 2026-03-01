@@ -474,12 +474,14 @@ class SpotLifecycleManager:
         backend: LifecycleBackend | None = None,
         periodic_interval: float = 300.0,
         checkpoint_id_prefix: str = "ckpt",
+        keep_checkpoints: int | None = None,
     ):
         self.store = store
         self.adapter = adapter
         self.backend = backend or detect_backend()
         self.periodic_interval = periodic_interval
         self.checkpoint_id_prefix = checkpoint_id_prefix
+        self.keep_checkpoints = keep_checkpoints
 
         self._interrupt_event: InterruptEvent | None = None
         self._last_checkpoint_time = 0.0
@@ -583,6 +585,16 @@ class SpotLifecycleManager:
             self.store.save_checkpoint(ckpt_id, payload.tensors, payload.metadata)
         )
 
+        if self.keep_checkpoints is not None:
+            from spot_checkpoint.gc import garbage_collect
+            self._run_async(
+                garbage_collect(
+                    self.store,
+                    prefix=self.checkpoint_id_prefix,
+                    keep=self.keep_checkpoints,
+                )
+            )
+
         with self._lock:
             self._last_checkpoint_time = time.time()
             self._checkpoint_count += 1
@@ -611,6 +623,16 @@ class SpotLifecycleManager:
         self._run_async(
             self.store.save_checkpoint(ckpt_id, payload.tensors, payload.metadata)
         )
+
+        if self.keep_checkpoints is not None:
+            from spot_checkpoint.gc import garbage_collect
+            self._run_async(
+                garbage_collect(
+                    self.store,
+                    prefix=self.checkpoint_id_prefix,
+                    keep=self.keep_checkpoints,
+                )
+            )
 
         self._checkpoint_count += 1
         logger.warning("Emergency checkpoint written: %s", ckpt_id)
@@ -681,6 +703,7 @@ def spot_safe(
     job_id: str | None = None,
     periodic_interval: float | None = None,
     adapter_class: Any = None,
+    keep_checkpoints: int | None = None,
     **store_kwargs: Any,
 ) -> Callable[[dict[str, Any]], None]:
     """
@@ -693,6 +716,7 @@ def spot_safe(
         SPOT_CHECKPOINT_INTERVAL     — periodic checkpoint interval in seconds (default 300)
         SPOT_CHECKPOINT_SHARD_SIZE   — shard size in bytes (default 67108864 = 64 MB)
         SPOT_CHECKPOINT_MAX_CONCURRENCY — parallel S3 streams (default 32)
+        SPOT_CHECKPOINT_KEEP         — number of checkpoints to keep (default: keep all)
 
     Usage:
         mf = scf.RHF(mol)
@@ -714,6 +738,10 @@ def spot_safe(
         periodic_interval = float(
             os.environ.get("SPOT_CHECKPOINT_INTERVAL", "300")
         )
+
+    if keep_checkpoints is None:
+        _keep_env = os.environ.get("SPOT_CHECKPOINT_KEEP")
+        keep_checkpoints = int(_keep_env) if _keep_env is not None else None
 
     if adapter_class is None:
         adapter_class = _detect_adapter_class(solver)
@@ -740,6 +768,7 @@ def spot_safe(
         store=store,
         adapter=adapter,
         periodic_interval=periodic_interval,
+        keep_checkpoints=keep_checkpoints,
     )
 
     return mgr.make_callback()
@@ -909,6 +938,117 @@ async def spot_restore_async(
     return await mgr.restore_latest()
 
 
+async def _status_from_store(
+    store: CheckpointStore,
+    checkpoint_id_prefix: str = "",
+) -> dict[str, Any] | None:
+    """Return a flattened status dict for the latest checkpoint in *store*.
+
+    Args:
+        store: The checkpoint store to query.
+        checkpoint_id_prefix: Only consider checkpoints whose ID starts with
+            this prefix.  Pass ``""`` to consider all checkpoints.
+
+    Returns:
+        A dict with top-level manifest fields plus all metadata keys merged
+        in, or ``None`` if no checkpoints are found.
+    """
+    checkpoints = await store.list_checkpoints(checkpoint_id_prefix)
+    if not checkpoints:
+        return None
+
+    latest = sorted(checkpoints, key=lambda c: c.get("timestamp", 0))[-1]
+
+    result: dict[str, Any] = {
+        "checkpoint_id": latest["checkpoint_id"],
+        "method": latest["method"],
+        "timestamp": latest["timestamp"],
+        "total_bytes": latest["total_bytes"],
+    }
+    result.update(latest.get("metadata", {}))
+    return result
+
+
+def spot_status(
+    bucket: str | None = None,
+    job_id: str | None = None,
+    checkpoint_id_prefix: str = "ckpt",
+    **store_kwargs: Any,
+) -> dict[str, Any] | None:
+    """Return metadata of the latest checkpoint without loading tensors.
+
+    All parameters can be set via environment variables:
+
+        SPOT_CHECKPOINT_BUCKET       — S3 bucket (required if bucket not passed)
+        SPOT_CHECKPOINT_SHARD_SIZE   — shard size in bytes (default 64 MB)
+        SPOT_CHECKPOINT_MAX_CONCURRENCY — parallel S3 streams (default 32)
+
+    Args:
+        bucket: S3 bucket name. Falls back to SPOT_CHECKPOINT_BUCKET env var.
+        job_id: Job identifier scoping the checkpoints.
+        checkpoint_id_prefix: Prefix filter for checkpoint IDs (default: "ckpt").
+        **store_kwargs: Extra keyword arguments passed to S3ShardedStore.
+
+    Returns:
+        A dict with ``checkpoint_id``, ``method``, ``timestamp``,
+        ``total_bytes``, and all user metadata keys merged at top level,
+        or ``None`` if no checkpoints exist.
+    """
+    return asyncio.run(
+        spot_status_async(
+            bucket=bucket,
+            job_id=job_id,
+            checkpoint_id_prefix=checkpoint_id_prefix,
+            **store_kwargs,
+        )
+    )
+
+
+async def spot_status_async(
+    bucket: str | None = None,
+    job_id: str | None = None,
+    checkpoint_id_prefix: str = "ckpt",
+    **store_kwargs: Any,
+) -> dict[str, Any] | None:
+    """Async-native version of spot_status() for use inside running event loops.
+
+    Args:
+        bucket: S3 bucket name. Falls back to SPOT_CHECKPOINT_BUCKET env var.
+        job_id: Job identifier scoping the checkpoints.
+        checkpoint_id_prefix: Prefix filter for checkpoint IDs (default: "ckpt").
+        **store_kwargs: Extra keyword arguments passed to S3ShardedStore.
+
+    Returns:
+        A dict with ``checkpoint_id``, ``method``, ``timestamp``,
+        ``total_bytes``, and all user metadata keys merged at top level,
+        or ``None`` if no checkpoints exist.
+    """
+    if bucket is None:
+        bucket = os.environ.get("SPOT_CHECKPOINT_BUCKET")
+    if bucket is None:
+        raise ValueError(
+            "bucket is required. Pass it directly or set SPOT_CHECKPOINT_BUCKET."
+        )
+
+    if job_id is None:
+        job_id = (
+            os.environ.get("SLURM_JOB_ID")
+            or os.environ.get("SPAWN_INSTANCE_ID")
+            or f"pyscf-{os.getpid()}"
+        )
+
+    store_kwargs.setdefault(
+        "shard_size", _env_int("SPOT_CHECKPOINT_SHARD_SIZE", 64 * 1024 * 1024)
+    )
+    store_kwargs.setdefault(
+        "max_concurrency", _env_int("SPOT_CHECKPOINT_MAX_CONCURRENCY", 32)
+    )
+
+    from spot_checkpoint.storage import S3ShardedStore
+    store = S3ShardedStore(bucket=bucket, job_id=job_id, **store_kwargs)
+    return await _status_from_store(store, checkpoint_id_prefix)
+
+
 def _detect_adapter_class(solver: Any) -> type:
     """Map PySCF solver object → checkpoint adapter class."""
     mro_names = [cls.__name__ for cls in type(solver).__mro__]
@@ -920,6 +1060,10 @@ def _detect_adapter_class(solver: Any) -> type:
     if any(n in mro_names for n in ("CASSCF", "CASCI")):
         from spot_checkpoint.adapters.pyscf import CASSCFCheckpointAdapter
         return CASSCFCheckpointAdapter
+
+    if any(n in mro_names for n in ("KRHF", "KUHF", "KROHF", "KRKS", "KUKS", "KSCF")):
+        from spot_checkpoint.adapters.pyscf import SCFCheckpointAdapter
+        return SCFCheckpointAdapter
 
     if any(n in mro_names for n in ("SCF", "RHF", "UHF", "ROHF", "RKS", "UKS")):
         from spot_checkpoint.adapters.pyscf import SCFCheckpointAdapter

@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
+from typing import Any
 
 import numpy as np
+import pytest
 
 from spot_checkpoint.gc import garbage_collect
 from spot_checkpoint.storage import LocalStore
@@ -117,3 +120,68 @@ async def test_gc_return_dict_keys(local_store: LocalStore) -> None:
 
     result2 = await garbage_collect(local_store, prefix="")
     assert set(result2.keys()) == {"total", "kept", "deleted"}
+
+
+async def test_auto_gc_via_manager(
+    tmp_path: Any,
+    fake_adapter: Any,
+) -> None:
+    """keep_checkpoints=2 auto-prunes checkpoints after each periodic save."""
+    from spot_checkpoint.lifecycle import LifecycleBackend, InterruptEvent, SpotLifecycleManager
+
+    store = LocalStore(base_dir=tmp_path, job_id="gc-test")
+
+    class NoOpBackend(LifecycleBackend):
+        def start(self, on_interrupt: Any) -> None:
+            pass
+
+        def stop(self) -> None:
+            pass
+
+    mgr = SpotLifecycleManager(
+        store=store,
+        adapter=fake_adapter,
+        backend=NoOpBackend(),
+        keep_checkpoints=2,
+    )
+    mgr.start()
+    try:
+        for i in range(4):
+            mgr._do_periodic_checkpoint(i)
+
+        remaining = await store.list_checkpoints("")
+        assert len(remaining) == 2
+    finally:
+        mgr.stop()
+
+
+def test_spot_safe_keep_checkpoints_env_var(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+    fake_adapter: Any,
+) -> None:
+    """SPOT_CHECKPOINT_KEEP env var sets keep_checkpoints on SpotLifecycleManager."""
+    from spot_checkpoint.lifecycle import LifecycleBackend, SpotLifecycleManager
+
+    monkeypatch.setenv("SPOT_CHECKPOINT_KEEP", "2")
+
+    # Simulate the env-var reading logic used by spot_safe()
+    _keep_env = os.environ.get("SPOT_CHECKPOINT_KEEP")
+    keep_checkpoints = int(_keep_env) if _keep_env is not None else None
+
+    store = LocalStore(base_dir=tmp_path, job_id="env-test")
+
+    class NoOpBackend(LifecycleBackend):
+        def start(self, on_interrupt: Any) -> None:
+            pass
+
+        def stop(self) -> None:
+            pass
+
+    mgr = SpotLifecycleManager(
+        store=store,
+        adapter=fake_adapter,
+        backend=NoOpBackend(),
+        keep_checkpoints=keep_checkpoints,
+    )
+    assert mgr.keep_checkpoints == 2

@@ -1,5 +1,8 @@
 # spot-checkpoint
 
+[![CI](https://github.com/scttfrdmn/spot-checkpoint/actions/workflows/ci.yml/badge.svg)](https://github.com/scttfrdmn/spot-checkpoint/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/scttfrdmn/spot-checkpoint/branch/main/graph/badge.svg)](https://codecov.io/gh/scttfrdmn/spot-checkpoint)
+
 Fault-tolerant checkpoint/restart for iterative scientific computations on preemptible cloud instances.
 
 **Take your existing PySCF script, add two lines, run on spot at 70% discount with automatic fault tolerance.**

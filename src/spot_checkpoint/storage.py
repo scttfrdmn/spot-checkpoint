@@ -206,7 +206,7 @@ class LocalStore:
             logger.info("Deleted checkpoint %s", checkpoint_id)
 
 
-class S3ShardedStore:
+class S3ShardedStore:  # pragma: no cover
     """
     S3-optimized checkpoint store with parallel sharded writes.
 

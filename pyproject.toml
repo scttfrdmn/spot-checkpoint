@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "spot-checkpoint"
-version = "0.7.0"
+version = "0.8.0"
 description = "Checkpoint/restart for iterative scientific computations on preemptible cloud instances"
 readme = "README.md"
 license = "Apache-2.0"
@@ -39,6 +39,7 @@ compress = [
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
+    "pytest-cov>=4.0",
     "moto[s3]>=5.0",
     "flask>=3.0",
     "flask-cors>=4.0",
@@ -79,6 +80,18 @@ ignore_missing_imports = true
 # Typer decorators are untyped when the package is absent; relax for cli module
 module = "spot_checkpoint.cli"
 disallow_untyped_decorators = false
+
+[tool.coverage.run]
+omit = [
+    "src/spot_checkpoint/adapters/pyscf.py",  # optional dep; tested when pyscf is installed
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

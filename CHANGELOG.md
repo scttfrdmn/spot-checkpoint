@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-03-01
+
+### Added
+- `SpotLifecycleManager`: new `keep_checkpoints: int | None = None` parameter — after each
+  periodic or emergency checkpoint, automatically calls `garbage_collect()` to prune old
+  checkpoints beyond the retention limit (closes #36)
+- `spot_safe()`: new `keep_checkpoints` parameter; reads `SPOT_CHECKPOINT_KEEP` env var when
+  not passed explicitly; forwards to `SpotLifecycleManager` (closes #36)
+- `spot_status()` and `spot_status_async()` — query the latest checkpoint's metadata without
+  loading tensors; returns a flat dict with `checkpoint_id`, `method`, `timestamp`,
+  `total_bytes`, and all user metadata keys merged at top level; `None` if no checkpoints
+  exist (closes #37)
+- `spot_status` and `spot_status_async` exported from `spot_checkpoint.__init__` (closes #37)
+- `_status_from_store()` internal async helper used by `spot_status_async` and directly
+  testable with any `CheckpointStore` (closes #37)
+- `spot-checkpoint status LOCATION JOB_ID` CLI subcommand — shows latest checkpoint metadata
+  in a rich table; `--json` output; exits non-zero when no checkpoints found (closes #37)
+- `_detect_adapter_class()`: k-point SCF solvers (`KRHF`, `KUHF`, `KROHF`, `KRKS`, `KUKS`,
+  `KSCF`) now detected and mapped to `SCFCheckpointAdapter` — k-point solvers use the same
+  HDF5 chkfile format as gamma-point SCF (closes #38)
+- `tests/test_pyscf_lifecycle_integration.py`: 3 real PySCF integration tests —
+  emergency checkpoint + restore round-trip, empty-store restore returns False,
+  keep_checkpoints prunes correctly during SCF (closes #34)
+- `pytest-cov>=4.0` added to dev optional dependencies (closes #39)
+- `.github/workflows/ci.yml`: CI workflow with ruff lint, mypy typecheck, pytest with
+  `--cov-fail-under=80` coverage gate, and Codecov upload (closes #39)
+- `README.md`: CI and codecov badges (closes #39)
+
+### Changed
+- `pyproject.toml`: version bumped to `0.8.0`
+- `__init__.py`: `__version__` updated to `"0.8.0"`
+
 ## [0.7.0] - 2026-03-01
 
 ### Added
@@ -163,7 +195,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `docs/ARCHITECTURE.md`: full three-layer design spec with throughput math and open questions
 - `pyproject.toml`: `hatchling` build, `uv`-compatible dependency spec
 
-[Unreleased]: https://github.com/scttfrdmn/spot-checkpoint/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/scttfrdmn/spot-checkpoint/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/scttfrdmn/spot-checkpoint/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/scttfrdmn/spot-checkpoint/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/scttfrdmn/spot-checkpoint/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/scttfrdmn/spot-checkpoint/compare/v0.1.0...v0.5.0
