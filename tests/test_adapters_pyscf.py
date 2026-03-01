@@ -243,7 +243,9 @@ class TestCASSCFAdapter:
 
         assert payload.metadata["method"] == "casscf"
         assert payload.metadata["ncas"] == 2
-        assert payload.metadata["nelecas"] == 2
+        # PySCF stores nelecas as (nalpha, nbeta) tuple
+        nelecas = payload.metadata["nelecas"]
+        assert (nelecas == 2) or (isinstance(nelecas, tuple) and sum(nelecas) == 2)
         assert payload.metadata["e_tot"] == pytest.approx(self.mc.e_tot, rel=1e-10)
 
     def test_size_estimate(self):

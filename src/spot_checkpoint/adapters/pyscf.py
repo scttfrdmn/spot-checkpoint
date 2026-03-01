@@ -206,6 +206,14 @@ class CASSCFCheckpointAdapter:
             "mo_coeff": np.asarray(self.mc.mo_coeff),
         }
 
+        metadata: dict[str, Any] = {
+            "e_tot": float(self.mc.e_tot) if self.mc.e_tot else None,
+            "e_cas": float(self.mc.e_cas) if hasattr(self.mc, "e_cas") and self.mc.e_cas else None,
+            "ncas": self.mc.ncas,
+            "nelecas": self.mc.nelecas,
+            "method": "casscf",
+        }
+
         if self.mc.ci is not None:
             if isinstance(self.mc.ci, np.ndarray):
                 tensors["ci"] = self.mc.ci
@@ -226,14 +234,6 @@ class CASSCFCheckpointAdapter:
                         "directory found — external solver CI cannot be checkpointed.",
                         type(self.mc.ci).__name__,
                     )
-
-        metadata: dict[str, Any] = {
-            "e_tot": float(self.mc.e_tot) if self.mc.e_tot else None,
-            "e_cas": float(self.mc.e_cas) if hasattr(self.mc, "e_cas") and self.mc.e_cas else None,
-            "ncas": self.mc.ncas,
-            "nelecas": self.mc.nelecas,
-            "method": "casscf",
-        }
 
         return CheckpointPayload(
             tensors=tensors,
