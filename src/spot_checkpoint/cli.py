@@ -480,6 +480,27 @@ def validate(
     console.print("[green]All checksums verified.[/green]")
 
 
+@app.command("complete")
+def complete_cmd(
+    location: Annotated[str, typer.Argument(help="Storage location (path or s3://bucket)")],
+    job_id: Annotated[str, typer.Argument(help="Job identifier")],
+    keep: Annotated[
+        int, typer.Option("--keep", "-k", help="Checkpoints to retain (0 = delete all)")
+    ] = 0,
+    json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
+) -> None:
+    """Signal job completion and clean up checkpoints."""
+    store = _make_store(location, job_id)
+    result = asyncio.run(garbage_collect(store, prefix="", keep=keep))
+    if json_output:
+        typer.echo(json.dumps(result, indent=2))
+    else:
+        console.print(f"Deleted: {result['deleted']}")
+        console.print(f"Kept: {result['kept']}")
+        if result["errors"]:
+            err_console.print(f"[red]Failed to delete: {result['errors']}[/red]")
+
+
 @app.command("bench")
 def bench(
     location: Annotated[str, typer.Argument(help="Storage location (path or s3://bucket)")],

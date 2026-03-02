@@ -177,6 +177,7 @@ def _benchmark_script(bucket_name: str) -> str:
 
         import numpy as np
 
+        from spot_checkpoint import spot_complete
         from spot_checkpoint.lifecycle import SpotLifecycleManager, detect_backend
         from spot_checkpoint.protocol import Checkpointable, CheckpointPayload
         from spot_checkpoint.storage import S3ShardedStore
@@ -231,6 +232,7 @@ def _benchmark_script(bucket_name: str) -> str:
                 backend=backend,
                 periodic_interval=15.0,   # short for CI — ensures checkpoint before FIS fires
                 checkpoint_id_prefix=JOB_ID,
+                keep_checkpoints=3,
             )
 
             # Attempt restore from previous run
@@ -248,22 +250,10 @@ def _benchmark_script(bucket_name: str) -> str:
                 log.info("Benchmark complete — final value norm: %.6f",
                          float(np.linalg.norm(solver.value)))
 
-                # Write completion marker so CI workflow can verify successful restore
-                import json as _json
-                import subprocess as _sp
-                marker = _json.dumps({{
-                    "status": "completed",
-                    "completed_at": time.time(),
-                    "total_iterations": TOTAL_ITERS,
-                    "restored_from_iteration": start_iter,
-                }})
-                _sp.run(
-                    ["aws", "s3", "cp", "-",
-                     f"s3://{{BUCKET}}/{{JOB_ID}}/completion-marker.json"],
-                    input=marker.encode(),
-                    check=True,
-                )
-                log.info("Wrote completion marker to S3")
+                # Prune old checkpoints, keep latest as archive for inspection
+                log.info("All %d iterations complete — pruning old checkpoints", TOTAL_ITERS)
+                spot_complete(bucket=BUCKET, job_id=JOB_ID, keep=1)
+                log.info("Smoke test PASSED — 1 checkpoint retained as archive")
 
 
         if __name__ == "__main__":

@@ -264,6 +264,30 @@ class TestMakeStore:
         assert isinstance(kwargs["shard_size"], int)
 
 
+class TestCompleteCommand:
+    def test_complete_deletes_all(self, populated_store: tuple[Path, str]) -> None:
+        """complete command with --keep 0 deletes all checkpoints, exits 0."""
+        path, job_id = populated_store
+        result = runner.invoke(app, ["complete", str(path), job_id, "--keep", "0"])
+        assert result.exit_code == 0
+        assert "Deleted: 3" in result.output
+
+        store = LocalStore(base_dir=path, job_id=job_id)
+        remaining = asyncio.run(store.list_checkpoints(""))
+        assert remaining == []
+
+    def test_complete_keep_one(self, populated_store: tuple[Path, str]) -> None:
+        """complete command with --keep 1 leaves exactly 1 checkpoint, exits 0."""
+        path, job_id = populated_store
+        result = runner.invoke(app, ["complete", str(path), job_id, "--keep", "1"])
+        assert result.exit_code == 0
+        assert "Deleted: 2" in result.output
+
+        store = LocalStore(base_dir=path, job_id=job_id)
+        remaining = asyncio.run(store.list_checkpoints(""))
+        assert len(remaining) == 1
+
+
 class TestRestoreCommandOverwrite:
     def test_restore_warns_on_overwrite(
         self, populated_store: tuple[Path, str], tmp_path: Path, caplog: pytest.LogCaptureFixture

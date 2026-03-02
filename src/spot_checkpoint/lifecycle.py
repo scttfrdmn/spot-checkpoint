@@ -487,6 +487,7 @@ class SpotLifecycleManager:
         periodic_interval: float = 300.0,
         checkpoint_id_prefix: str = "ckpt",
         keep_checkpoints: int | None = None,
+        cleanup_on_complete: int | None = None,
     ):
         self.store = store
         self.adapter = adapter
@@ -494,10 +495,12 @@ class SpotLifecycleManager:
         self.periodic_interval = periodic_interval
         self.checkpoint_id_prefix = checkpoint_id_prefix
         self.keep_checkpoints = keep_checkpoints
+        self.cleanup_on_complete = cleanup_on_complete
 
         self._interrupt_event: InterruptEvent | None = None
         self._last_checkpoint_time = 0.0
         self._checkpoint_count = 0
+        self._completed = False
         self._lock = threading.Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._loop_thread: threading.Thread | None = None
@@ -507,7 +510,65 @@ class SpotLifecycleManager:
         return self
 
     def __exit__(self, *exc: Any) -> None:
+        # Auto-complete on clean exit if cleanup_on_complete is set
+        # and the user did not already call complete() explicitly.
+        if exc[0] is None and not self._completed and self.cleanup_on_complete is not None:
+            try:
+                self.complete()
+            except Exception as e:
+                logger.warning("cleanup_on_complete GC failed: %s", e)
         self.stop()
+
+    def complete(self, keep: int | None = None) -> None:
+        """Signal successful completion; optionally GC old checkpoints.
+
+        Can be called explicitly before the context-manager exits, or omitted
+        when ``cleanup_on_complete`` is set (auto-triggered by ``__exit__``).
+
+        Args:
+            keep: Checkpoints to retain.
+                ``0``  — delete all checkpoints
+                ``N``  — keep the N most recent
+                ``None`` — use ``cleanup_on_complete`` default; if that is also
+                           ``None``, no GC is run
+        """
+        self._completed = True
+        effective_keep = keep if keep is not None else self.cleanup_on_complete
+        if effective_keep is not None:
+            from spot_checkpoint.gc import garbage_collect
+            self._run_async(
+                garbage_collect(
+                    self.store,
+                    prefix=self.checkpoint_id_prefix,
+                    keep=effective_keep,
+                )
+            )
+        if isinstance(self.backend, SporeLifecycleBackend):
+            self.backend.signal_completion()
+        logger.info(
+            "SpotLifecycleManager: computation complete — GC keep=%s", effective_keep
+        )
+
+    async def complete_async(self, keep: int | None = None) -> None:
+        """Awaitable variant of :meth:`complete` for callers inside a running event loop.
+
+        Args:
+            keep: Checkpoints to retain (same semantics as :meth:`complete`).
+        """
+        self._completed = True
+        effective_keep = keep if keep is not None else self.cleanup_on_complete
+        if effective_keep is not None:
+            from spot_checkpoint.gc import garbage_collect
+            await garbage_collect(
+                self.store,
+                prefix=self.checkpoint_id_prefix,
+                keep=effective_keep,
+            )
+        if isinstance(self.backend, SporeLifecycleBackend):
+            self.backend.signal_completion()
+        logger.info(
+            "SpotLifecycleManager: computation complete (async) — GC keep=%s", effective_keep
+        )
 
     def start(self) -> None:
         self._loop = asyncio.new_event_loop()
@@ -1063,6 +1124,93 @@ async def spot_status_async(
     from spot_checkpoint.storage import S3ShardedStore
     store = S3ShardedStore(bucket=bucket, job_id=job_id, **store_kwargs)
     return await _status_from_store(store, checkpoint_id_prefix)
+
+
+def spot_complete(
+    bucket: str | None = None,
+    job_id: str | None = None,
+    keep: int = 0,
+    checkpoint_id_prefix: str = "ckpt",
+    **store_kwargs: Any,
+) -> None:
+    """Clean up checkpoints after successful job completion.
+
+    Typical usage after kernel() returns normally::
+
+        spot_complete(bucket="my-bucket", keep=0)   # delete all
+        spot_complete(bucket="my-bucket", keep=1)   # keep latest as archive
+
+    All parameters can be set via environment variables:
+
+        SPOT_CHECKPOINT_BUCKET       — S3 bucket (required if bucket not passed)
+        SPOT_CHECKPOINT_SHARD_SIZE   — shard size in bytes (default 64 MB)
+        SPOT_CHECKPOINT_MAX_CONCURRENCY — parallel S3 streams (default 32)
+
+    Args:
+        bucket: S3 bucket. Falls back to SPOT_CHECKPOINT_BUCKET env var.
+        job_id: Job identifier. Falls back to SLURM_JOB_ID, SPAWN_INSTANCE_ID,
+            or ``pyscf-{hostname}-{pid}``.
+        keep: Checkpoints to retain (0 = delete all, N = keep N most recent).
+        checkpoint_id_prefix: Prefix filter (default: "ckpt").
+        **store_kwargs: Extra kwargs passed to S3ShardedStore.
+    """
+    asyncio.run(
+        spot_complete_async(
+            bucket=bucket,
+            job_id=job_id,
+            keep=keep,
+            checkpoint_id_prefix=checkpoint_id_prefix,
+            **store_kwargs,
+        )
+    )
+
+
+async def spot_complete_async(
+    bucket: str | None = None,
+    job_id: str | None = None,
+    keep: int = 0,
+    checkpoint_id_prefix: str = "ckpt",
+    **store_kwargs: Any,
+) -> None:
+    """Async-native version of spot_complete() for use inside running event loops.
+
+    Args:
+        bucket: S3 bucket. Falls back to SPOT_CHECKPOINT_BUCKET env var.
+        job_id: Job identifier. Falls back to SLURM_JOB_ID, SPAWN_INSTANCE_ID,
+            or ``pyscf-{hostname}-{pid}``.
+        keep: Checkpoints to retain (0 = delete all, N = keep N most recent).
+        checkpoint_id_prefix: Prefix filter (default: "ckpt").
+        **store_kwargs: Extra kwargs passed to S3ShardedStore.
+    """
+    if bucket is None:
+        bucket = os.environ.get("SPOT_CHECKPOINT_BUCKET")
+    if bucket is None:
+        raise ValueError(
+            "bucket is required. Pass it directly or set SPOT_CHECKPOINT_BUCKET."
+        )
+
+    if job_id is None:
+        import socket
+        job_id = (
+            os.environ.get("SLURM_JOB_ID")
+            or os.environ.get("SPAWN_INSTANCE_ID")
+            or f"pyscf-{socket.gethostname()}-{os.getpid()}"
+        )
+
+    store_kwargs.setdefault(
+        "shard_size", _env_int("SPOT_CHECKPOINT_SHARD_SIZE", 64 * 1024 * 1024)
+    )
+    store_kwargs.setdefault(
+        "max_concurrency", _env_int("SPOT_CHECKPOINT_MAX_CONCURRENCY", 32)
+    )
+
+    from spot_checkpoint.gc import garbage_collect
+    from spot_checkpoint.storage import S3ShardedStore
+    store = S3ShardedStore(bucket=bucket, job_id=job_id, **store_kwargs)
+    await garbage_collect(store, prefix=checkpoint_id_prefix, keep=keep)
+    logger.info(
+        "spot_complete: GC complete — bucket=%s job_id=%s keep=%d", bucket, job_id, keep
+    )
 
 
 def _detect_adapter_class(solver: Any) -> type:

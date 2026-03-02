@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-03-01
+
+### Added
+- **lifecycle.py**: `SpotLifecycleManager.complete(keep)` — explicit completion hook with
+  optional GC; sets `_completed = True` to prevent double-cleanup (closes #55)
+- **lifecycle.py**: `SpotLifecycleManager.complete_async(keep)` — awaitable variant of
+  `complete()` for callers inside a running event loop (closes #55)
+- **lifecycle.py**: `cleanup_on_complete: int | None` constructor param — auto-triggers
+  `complete()` on clean `__exit__` when set; skipped on exception to preserve checkpoints
+  for restart (closes #56)
+- **lifecycle.py**: `spot_complete(bucket, job_id, keep, ...)` and `spot_complete_async(...)`
+  — standalone top-level helpers that resolve store from env vars and run GC; mirrors the
+  `spot_restore` / `spot_status` pattern (closes #61)
+- **__init__.py**: `spot_complete` and `spot_complete_async` exported from package
+  `__all__` (closes #58)
+- **cli.py**: `spot-checkpoint complete <location> <job_id> [--keep N]` subcommand —
+  signals job success and runs GC from the command line (closes #59)
+- **infra/run_smoke.py**: New automated FIS smoke-test runner (stdlib + boto3) that runs
+  the full two-instance scenario non-interactively and prints PASS/FAIL with timing (closes #60)
+- **tests/test_lifecycle.py**: 5 new tests covering `complete()`, `cleanup_on_complete`,
+  `spot_complete()`, and `spot_complete_async()` (closes #62)
+- **tests/test_lifecycle_e2e.py**: New file with 4 end-to-end scenario tests using
+  `FakeCheckpointAdapter` + `LocalStore` (no S3, no PySCF) — happy path cleanup, keep-latest,
+  no-cleanup default, interrupt+restore+complete, exception-preserves (closes #62)
+- **tests/test_cli.py**: 2 new tests for `complete` command (`--keep 0` and `--keep 1`)
+
+### Changed
+- **infra/smoke_stack.py**: `SpotLifecycleManager` gains `keep_checkpoints=3` to limit
+  accumulation during run; subprocess completion-marker hack replaced with `spot_complete(keep=1)`
+  (closes #59)
+- `pyproject.toml` + `__init__.py`: version bumped to `0.10.0`
+
 ## [0.9.0] - 2026-03-02
 
 ### Fixed

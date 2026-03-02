@@ -17,6 +17,8 @@ from spot_checkpoint.lifecycle import (
     SporeLifecycleBackend,
     SpotLifecycleManager,
     detect_backend,
+    spot_complete,
+    spot_complete_async,
     spot_restore,
     spot_restore_async,
     spot_safe,
@@ -35,7 +37,7 @@ from spot_checkpoint.protocol import (
 )
 from spot_checkpoint.storage import LocalStore, S3ShardedStore
 
-__version__ = "0.9.0"
+__version__ = "0.10.0"
 
 __all__ = [  # noqa: RUF022  (grouped by category, not alphabetically)
     # Top-level API
@@ -43,6 +45,8 @@ __all__ = [  # noqa: RUF022  (grouped by category, not alphabetically)
     "spot_safe_async",
     "spot_restore",
     "spot_restore_async",
+    "spot_complete",
+    "spot_complete_async",
     "spot_status",
     "spot_status_async",
     "SpotLifecycleManager",

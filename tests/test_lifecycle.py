@@ -21,6 +21,8 @@ from spot_checkpoint.lifecycle import (
     _detect_adapter_class,
     _status_from_store,
     detect_backend,
+    spot_complete,
+    spot_complete_async,
     spot_restore_async,
     spot_safe,
     spot_status,
@@ -471,3 +473,108 @@ class TestJobIdFallbackIncludesHostname:
             )
 
         assert socket.gethostname() in captured["job_id"]
+
+
+# ---------------------------------------------------------------------------
+# New v0.10.0 tests — complete(), cleanup_on_complete, spot_complete
+# ---------------------------------------------------------------------------
+
+
+class TestCompleteMethod:
+    def _make_mgr(
+        self,
+        tmp_path: Path,
+        fake_adapter: Any,
+        cleanup_on_complete: int | None = None,
+    ) -> tuple[SpotLifecycleManager, LocalStore]:
+        store = LocalStore(base_dir=tmp_path, job_id="complete-test")
+        mgr = SpotLifecycleManager(
+            store=store,
+            adapter=fake_adapter,
+            backend=_NoOpBackend(),
+            periodic_interval=0.0,
+            cleanup_on_complete=cleanup_on_complete,
+        )
+        return mgr, store
+
+    async def test_complete_runs_gc(self, tmp_path: Path, fake_adapter: Any) -> None:
+        """complete(keep=1) deletes all but the most recent checkpoint."""
+        mgr, store = self._make_mgr(tmp_path, fake_adapter)
+        mgr.start()
+        time.sleep(0.002)
+        # Write 3 checkpoints manually
+        mgr.check(0)
+        time.sleep(0.002)
+        mgr.check(1)
+        time.sleep(0.002)
+        mgr.check(2)
+
+        before = await store.list_checkpoints("")
+        assert len(before) == 3
+
+        mgr.complete(keep=1)
+        mgr.stop()
+
+        after = await store.list_checkpoints("")
+        assert len(after) == 1
+
+    async def test_complete_auto_on_clean_exit(
+        self, tmp_path: Path, fake_adapter: Any
+    ) -> None:
+        """cleanup_on_complete=0 deletes all checkpoints on normal __exit__."""
+        mgr, store = self._make_mgr(tmp_path, fake_adapter, cleanup_on_complete=0)
+
+        with mgr:
+            time.sleep(0.002)
+            mgr.check(0)
+            time.sleep(0.002)
+            mgr.check(1)
+
+        # __exit__ should have triggered complete() → GC → 0 checkpoints
+        remaining = await store.list_checkpoints("")
+        assert remaining == []
+
+    async def test_complete_not_triggered_on_exception(
+        self, tmp_path: Path, fake_adapter: Any
+    ) -> None:
+        """cleanup_on_complete is NOT triggered when an exception propagates."""
+        mgr, store = self._make_mgr(tmp_path, fake_adapter, cleanup_on_complete=0)
+
+        with pytest.raises(RuntimeError):
+            with mgr:
+                time.sleep(0.002)
+                mgr.check(0)
+                raise RuntimeError("simulated failure")
+
+        # Checkpoints must be preserved for restart
+        remaining = await store.list_checkpoints("")
+        assert len(remaining) >= 1
+
+
+class TestSpotCompleteFunction:
+    async def test_spot_complete_deletes_all(self, tmp_path: Path) -> None:
+        """spot_complete_async(keep=0) deletes all checkpoints."""
+        import numpy as np
+        from unittest.mock import patch
+
+        local = LocalStore(base_dir=tmp_path, job_id="complete-fn-test")
+        tensor = np.zeros((4,), dtype=np.float64)
+        await local.save_checkpoint("ckpt-a", {"s": tensor}, {"method": "fake"})
+        await local.save_checkpoint("ckpt-b", {"s": tensor}, {"method": "fake"})
+
+        before = await local.list_checkpoints("")
+        assert len(before) == 2
+
+        with patch("spot_checkpoint.storage.S3ShardedStore", return_value=local):
+            await spot_complete_async(bucket="test-bucket", keep=0)
+
+        after = await local.list_checkpoints("")
+        assert after == []
+
+    async def test_spot_complete_async_raises_without_bucket(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """spot_complete_async raises ValueError when bucket is not provided."""
+        monkeypatch.delenv("SPOT_CHECKPOINT_BUCKET", raising=False)
+        with pytest.raises(ValueError, match="bucket is required"):
+            await spot_complete_async()
