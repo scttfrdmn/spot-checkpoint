@@ -9,6 +9,7 @@ Resources created:
 
 from __future__ import annotations
 
+import base64
 import json
 from textwrap import dedent
 
@@ -66,6 +67,12 @@ class SpotCheckpointSmokeStack(cdk.Stack):
         bucket.grant_read_write(role)
         bucket.grant_delete(role)
 
+        # Staging bucket — read wheel during install
+        staging_bucket = s3.Bucket.from_bucket_name(
+            self, "StagingBucket", "spot-checkpoint-staging-942542972736"
+        )
+        staging_bucket.grant_read(role)
+
         # Self-identification and self-tagging (DirectEC2Backend + smoke-test tag)
         role.add_to_policy(
             iam.PolicyStatement(
@@ -120,15 +127,19 @@ class SpotCheckpointSmokeStack(cdk.Stack):
 
                 # ---- Install dependencies ----
                 dnf install -y python3.11 python3.11-pip git
-                pip3.11 install --quiet "spot-checkpoint[cli]"
+                # Install from staging wheel (pre-PyPI dev build)
+                WHEEL_FILE="spot_checkpoint-0.10.0-py3-none-any.whl"
+                aws s3 cp "s3://spot-checkpoint-staging-942542972736/wheels/$WHEEL_FILE" "/tmp/$WHEEL_FILE"
+                pip3.11 install --quiet "/tmp/$WHEEL_FILE[cli]"
 
-                # ---- Write benchmark script ----
-                cat > /root/run_benchmark.py << 'PYSCRIPT'
-                {_benchmark_script(bucket.bucket_name)}
-                PYSCRIPT
+                # ---- Write benchmark script (base64; bucket resolved at deploy time via env) ----
+                export SPOT_CHECKPOINT_BUCKET={bucket.bucket_name}
+                python3.11 -c "import base64; open('/root/run_benchmark.py','w').write(base64.b64decode('{base64.b64encode(_benchmark_script().encode()).decode()}').decode())"
 
                 # ---- Run (foreground so the instance stays alive under FIS) ----
                 python3.11 /root/run_benchmark.py
+                # Self-terminate after successful completion (shutdown-behavior=terminate)
+                shutdown -h now
             """),
         )
 
@@ -146,6 +157,7 @@ class SpotCheckpointSmokeStack(cdk.Stack):
             spot_options=ec2.LaunchTemplateSpotOptions(
                 request_type=ec2.SpotRequestType.ONE_TIME,
             ),
+            instance_initiated_shutdown_behavior=ec2.InstanceInitiatedShutdownBehavior.TERMINATE,
             launch_template_name="spot-checkpoint-smoke",
         )
 
@@ -160,19 +172,24 @@ class SpotCheckpointSmokeStack(cdk.Stack):
                       description="IAM instance profile ARN")
 
 
-def _benchmark_script(bucket_name: str) -> str:
-    """Return the Python benchmark script embedded in user-data."""
-    return dedent(f"""\
+def _benchmark_script() -> str:
+    """Return the Python benchmark script embedded in user-data.
+
+    The bucket name is read at runtime from the SPOT_CHECKPOINT_BUCKET env var,
+    which is set in user-data after CloudFormation resolves the bucket name token.
+    """
+    return dedent("""\
         \"\"\"
         Smoke-test benchmark: fake iterative solver with spot-checkpoint.
 
-        Runs 200 iterations of a trivial computation, checkpointing every 30 s.
+        Runs 60 iterations of a trivial computation, checkpointing every 15 s.
         On spot interruption DirectEC2Backend fires an emergency checkpoint and
         the instance exits cleanly.  After restart the manager restores from the
         latest checkpoint and resumes from where it left off.
         \"\"\"
         import asyncio
         import logging
+        import os
         import time
 
         import numpy as np
@@ -185,7 +202,7 @@ def _benchmark_script(bucket_name: str) -> str:
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
         log = logging.getLogger("smoke")
 
-        BUCKET = "{bucket_name}"
+        BUCKET = os.environ["SPOT_CHECKPOINT_BUCKET"]
         JOB_ID = "smoke-test"
         TOTAL_ITERS = 60
         ITER_SLEEP = 0.5   # seconds per iteration — short for CI speed
@@ -209,8 +226,8 @@ def _benchmark_script(bucket_name: str) -> str:
 
             def checkpoint_state(self) -> CheckpointPayload:
                 return CheckpointPayload(
-                    tensors={{"value": self._solver.value.copy()}},
-                    metadata={{"iteration": self._solver.iteration}},
+                    tensors={"value": self._solver.value.copy()},
+                    metadata={"iteration": self._solver.iteration},
                     method="fake-solver",
                     timestamp=time.time(),
                 )

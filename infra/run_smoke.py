@@ -92,7 +92,7 @@ def _list_checkpoints(s3: Any, bucket: str, job_id: str) -> list[str]:
 def _launch_instance(ec2: Any, template_id: str) -> str:
     """Launch one spot instance and return its instance ID."""
     resp = ec2.run_instances(
-        LaunchTemplate={"LaunchTemplateId": template_id},
+        LaunchTemplate={"LaunchTemplateId": template_id, "Version": "$Latest"},
         MinCount=1,
         MaxCount=1,
     )
@@ -103,8 +103,14 @@ def _launch_instance(ec2: Any, template_id: str) -> str:
 
 def _instance_is_tagged(ec2: Any, instance_id: str, tag_key: str) -> bool:
     """Return True when the instance has the expected smoke-test tag."""
-    resp = ec2.describe_instances(InstanceIds=[instance_id])
-    tags = resp["Reservations"][0]["Instances"][0].get("Tags", [])
+    try:
+        resp = ec2.describe_instances(InstanceIds=[instance_id])
+    except Exception:
+        return False  # instance not visible yet — retry
+    reservations = resp.get("Reservations", [])
+    if not reservations:
+        return False
+    tags = reservations[0]["Instances"][0].get("Tags", [])
     return any(t["Key"] == tag_key for t in tags)
 
 

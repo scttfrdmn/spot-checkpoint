@@ -66,6 +66,7 @@ Use GitHub issues for all tasks, bugs, and enhancements. Do not maintain standal
   - `uv run ruff check .` — lint
   - `uv run mypy src/` — type check
 - Never use `pip` or `python` directly — always `uv run` or `uv sync`
+- AWS: always use `AWS_PROFILE=aws` — e.g. `AWS_PROFILE=aws aws ...`, `AWS_PROFILE=aws cdk ...`
 
 ## Code Style
 
