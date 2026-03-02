@@ -2024,7 +2024,7 @@ wheels = [
 
 [[package]]
 name = "spot-checkpoint"
-version = "0.10.0"
+version = "0.11.0"
 source = { editable = "." }
 dependencies = [
     { name = "aioboto3" },
@@ -2056,6 +2056,10 @@ dev = [
 pyscf = [
     { name = "pyscf" },
 ]
+scipy = [
+    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -2079,12 +2083,13 @@ requires-dist = [
     { name = "rich", marker = "extra == 'cli'", specifier = ">=13.0" },
     { name = "rich", marker = "extra == 'dev'", specifier = ">=13.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4" },
+    { name = "scipy", marker = "extra == 'scipy'", specifier = ">=1.10" },
     { name = "typer", marker = "extra == 'cli'", specifier = ">=0.9" },
     { name = "typer", marker = "extra == 'dev'", specifier = ">=0.9" },
     { name = "xxhash", specifier = ">=3.0" },
     { name = "zstandard", marker = "extra == 'compress'", specifier = ">=0.21" },
 ]
-provides-extras = ["pyscf", "cli", "compress", "dev"]
+provides-extras = ["pyscf", "scipy", "cli", "compress", "dev"]
 
 [package.metadata.requires-dev]
 dev = [

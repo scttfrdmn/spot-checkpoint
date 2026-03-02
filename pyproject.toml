@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "spot-checkpoint"
-version = "0.10.0"
+version = "0.11.0"
 description = "Checkpoint/restart for iterative scientific computations on preemptible cloud instances"
 readme = "README.md"
 license = "Apache-2.0"
@@ -32,6 +32,7 @@ dependencies = [
 
 [project.optional-dependencies]
 pyscf = ["pyscf>=2.4"]
+scipy = ["scipy>=1.10"]
 cli = ["typer>=0.9", "rich>=13.0"]
 compress = [
     "zstandard>=0.21",
@@ -74,6 +75,11 @@ warn_unused_configs = true
 [[tool.mypy.overrides]]
 # typer and rich are optional CLI deps — not installed in the base dev venv
 module = ["typer", "typer.*", "rich", "rich.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# torch, openmm, scipy — optional adapter deps, not installed in base dev venv
+module = ["torch", "torch.*", "openmm", "openmm.*", "scipy", "scipy.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

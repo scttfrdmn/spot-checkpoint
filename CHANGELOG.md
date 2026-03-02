@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-03-01
+
+### Added
+- **adapters/numpy_dict.py**: `NumpyDictAdapter` — generic functional adapter for any
+  computation whose state fits in a `dict[str, np.ndarray]`.  Accepts callables for
+  `get_state`, `set_state`, and optional `get_metadata` / `set_metadata`; requires no
+  subclassing (closes #62)
+- **adapters/scipy_opt.py**: `ScipyOptimizeAdapter` — callback-pattern adapter for
+  `scipy.optimize.minimize`; saves current iterate `x` and iteration count; supports
+  warm-restart by passing `adapter.x` as `x0` (closes #63)
+- **adapters/scipy_opt.py**: `ScipySparseLinalgAdapter` — mirrors `ScipyOptimizeAdapter`
+  for `scipy.sparse.linalg` iterative solvers (cg, gmres, minres, etc.) (closes #63)
+- **adapters/torch.py**: `PyTorchTrainingAdapter` — checkpoints model weights (parameters
+  + buffers) and optimizer state (tensor entries + non-tensor entries) as numpy arrays;
+  restores to original device; each parameter is a separate tensor key for parallel S3
+  sharding (closes #64)
+- **adapters/openmm.py**: `OpenMMAdapter` — checkpoints atomic positions, velocities,
+  and periodic box vectors (nm / nm·ps⁻¹); metadata includes step, time, n_atoms, and
+  potential energy (closes #65)
+- **adapters/__init__.py**: exports `NumpyDictAdapter`, `ScipyOptimizeAdapter`,
+  `ScipySparseLinalgAdapter` (closes #66); `PyTorchTrainingAdapter` and `OpenMMAdapter`
+  exposed via their submodule paths to avoid hard import-time dependencies
+- **pyproject.toml**: added optional `scipy` extra (`scipy>=1.10`)
+- **tests/test_adapters_numpy_dict.py**: 7 tests for `NumpyDictAdapter`
+- **tests/test_adapters_scipy.py**: 9 tests for each of `ScipyOptimizeAdapter` and
+  `ScipySparseLinalgAdapter` plus 2 live-solver integration tests (closes #67)
+- **tests/test_adapters_torch.py**: 9 tests for `PyTorchTrainingAdapter`
+  (`pytest.importorskip("torch")` — auto-skip if not installed) (closes #67)
+- **tests/test_adapters_openmm.py**: 10 tests for `OpenMMAdapter`
+  (`pytest.importorskip("openmm")` — auto-skip if not installed) (closes #67)
+
+### Changed
+- `pyproject.toml` + `__init__.py`: version bumped to `0.11.0` (closes #68)
+
 ## [0.10.0] - 2026-03-01
 
 ### Added
