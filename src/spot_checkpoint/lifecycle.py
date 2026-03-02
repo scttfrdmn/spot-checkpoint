@@ -277,10 +277,20 @@ class SlurmLifecycleBackend(LifecycleBackend):
     @staticmethod
     def request_requeue() -> None:
         """Request Slurm to requeue this job."""
+        import subprocess
         job_id = os.environ.get("SLURM_JOB_ID")
         if job_id:
-            os.system(f"scontrol requeue {job_id}")
-            logger.info("Requested Slurm requeue for job %s", job_id)
+            result = subprocess.run(
+                ["scontrol", "requeue", job_id],
+                capture_output=True, text=True,
+            )
+            if result.returncode != 0:
+                logger.error(
+                    "scontrol requeue failed (rc=%d): %s",
+                    result.returncode, result.stderr.strip(),
+                )
+            else:
+                logger.info("Requested Slurm requeue for job %s", job_id)
 
 
 class DirectEC2Backend(LifecycleBackend):
@@ -357,6 +367,8 @@ class DirectEC2Backend(LifecycleBackend):
 
     def _maybe_refresh_token(self) -> None:
         """Refresh the cached IMDSv2 token if it is missing or close to expiry."""
+        # Refresh when less than _TOKEN_REFRESH_MARGIN seconds remain before expiry.
+        # "time.time() + MARGIN < expiry" ↔ "more than MARGIN seconds remain" → skip refresh.
         if time.time() + self._TOKEN_REFRESH_MARGIN < self._token_expiry:
             return  # Token still valid
         token = self._get_imds_token()
@@ -539,9 +551,8 @@ class SpotLifecycleManager:
         Returns:
             The return value of the coroutine.
         """
-        assert self._loop is not None and self._loop.is_running(), (
-            "_run_async called before start() or after stop()"
-        )
+        if self._loop is None or not self._loop.is_running():
+            raise RuntimeError("_run_async called before start() or after stop()")
         future = asyncio.run_coroutine_threadsafe(coro, self._loop)
         return future.result()
 
@@ -749,10 +760,11 @@ def spot_safe(
     adapter = adapter_class(solver)
 
     if job_id is None:
+        import socket
         job_id = (
             os.environ.get("SLURM_JOB_ID")
             or os.environ.get("SPAWN_INSTANCE_ID")
-            or f"pyscf-{os.getpid()}"
+            or f"pyscf-{socket.gethostname()}-{os.getpid()}"
         )
 
     store_kwargs.setdefault(
@@ -828,10 +840,11 @@ def spot_restore(
     adapter = adapter_class(solver)
 
     if job_id is None:
+        import socket
         job_id = (
             os.environ.get("SLURM_JOB_ID")
             or os.environ.get("SPAWN_INSTANCE_ID")
-            or f"pyscf-{os.getpid()}"
+            or f"pyscf-{socket.gethostname()}-{os.getpid()}"
         )
 
     store_kwargs.setdefault(
@@ -859,11 +872,13 @@ async def spot_safe_async(
     adapter_class: Any = None,
     **store_kwargs: Any,
 ) -> Callable[[dict[str, Any]], None]:
-    """Async-native version of spot_safe() for use inside running event loops.
+    """Async-compatible version of spot_safe() for use inside running event loops.
 
-    Identical to spot_safe() but does not call asyncio.run() internally,
-    making it safe to use in Jupyter notebooks, FastAPI handlers, and any
-    other async framework.
+    This function is declared ``async`` so it can be awaited by callers in
+    Jupyter notebooks, FastAPI handlers, and other async frameworks — making
+    it non-blocking from the caller's perspective.  Internally it delegates to
+    the synchronous :func:`spot_safe`, which performs no async I/O itself (store
+    creation is cheap and synchronous).
 
     Usage:
         mf.callback = await spot_safe_async(mf, bucket="my-checkpoints")
@@ -915,10 +930,11 @@ async def spot_restore_async(
     adapter = adapter_class(solver)
 
     if job_id is None:
+        import socket
         job_id = (
             os.environ.get("SLURM_JOB_ID")
             or os.environ.get("SPAWN_INSTANCE_ID")
-            or f"pyscf-{os.getpid()}"
+            or f"pyscf-{socket.gethostname()}-{os.getpid()}"
         )
 
     store_kwargs.setdefault(

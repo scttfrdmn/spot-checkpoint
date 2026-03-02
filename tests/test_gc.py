@@ -25,7 +25,7 @@ async def _save(store: LocalStore, ckpt_id: str, ts_offset: float = 0.0) -> None
 
 async def test_gc_empty_store(local_store: LocalStore) -> None:
     result = await garbage_collect(local_store, prefix="")
-    assert result == {"total": 0, "kept": 0, "deleted": 0}
+    assert result == {"total": 0, "kept": 0, "deleted": 0, "errors": []}
 
 
 async def test_gc_no_keep_keeps_all(local_store: LocalStore) -> None:
@@ -116,10 +116,10 @@ async def test_gc_return_dict_keys(local_store: LocalStore) -> None:
     await _save(local_store, "ckpt-001", 0.0)
 
     result = await garbage_collect(local_store, prefix="", keep=1)
-    assert set(result.keys()) == {"total", "kept", "deleted"}
+    assert set(result.keys()) == {"total", "kept", "deleted", "errors"}
 
     result2 = await garbage_collect(local_store, prefix="")
-    assert set(result2.keys()) == {"total", "kept", "deleted"}
+    assert set(result2.keys()) == {"total", "kept", "deleted", "errors"}
 
 
 async def test_auto_gc_via_manager(
@@ -153,6 +153,38 @@ async def test_auto_gc_via_manager(
         assert len(remaining) == 2
     finally:
         mgr.stop()
+
+
+async def test_gc_validates_negative_keep(local_store: LocalStore) -> None:
+    """garbage_collect raises ValueError for keep < 0."""
+    with pytest.raises(ValueError, match="keep must be >= 0"):
+        await garbage_collect(local_store, prefix="", keep=-1)
+
+
+async def test_gc_continues_on_deletion_error(local_store: LocalStore) -> None:
+    """GC continues if one deletion fails; second checkpoint is still deleted."""
+    from unittest.mock import AsyncMock, patch
+
+    await _save(local_store, "ckpt-001", 0.0)
+    await _save(local_store, "ckpt-002", 10.0)
+    await _save(local_store, "ckpt-003", 20.0)
+
+    original_delete = local_store.delete_checkpoint
+    call_count = 0
+
+    async def _failing_first(ckpt_id: str) -> None:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise OSError("simulated delete failure")
+        await original_delete(ckpt_id)
+
+    with patch.object(local_store, "delete_checkpoint", side_effect=_failing_first):
+        result = await garbage_collect(local_store, prefix="", keep=1)
+
+    # 3 total, keep=1, so 2 to_delete; 1 failed, 1 succeeded
+    assert result["deleted"] == 1
+    assert len(result["errors"]) == 1
 
 
 def test_spot_safe_keep_checkpoints_env_var(

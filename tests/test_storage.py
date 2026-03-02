@@ -138,3 +138,77 @@ async def test_local_compress_manifest_records_compression(tmp_path):
     manifest_path = store._ckpt_dir / "ckpt-m" / "_manifest.json"
     data = json.loads(manifest_path.read_text())
     assert data.get("compression") == "zstd"
+
+
+# ---------------------------------------------------------------------------
+# TensorSpec and CheckpointManifest protocol tests (v0.9.0)
+# ---------------------------------------------------------------------------
+
+from spot_checkpoint.protocol import CheckpointManifest, TensorSpec
+
+
+def test_tensorspec_invalid_num_shards_raises() -> None:
+    """TensorSpec raises ValueError when num_shards < 1."""
+    with pytest.raises(ValueError, match="num_shards must be >= 1"):
+        TensorSpec(
+            shape=(10,),
+            dtype="float64",
+            nbytes=80,
+            num_shards=0,
+            shard_size=80,
+            checksums=[],
+        )
+
+
+def test_tensorspec_checksum_count_mismatch_raises() -> None:
+    """TensorSpec raises ValueError when checksums length != num_shards."""
+    with pytest.raises(ValueError, match="checksums length"):
+        TensorSpec(
+            shape=(10,),
+            dtype="float64",
+            nbytes=80,
+            num_shards=2,
+            shard_size=40,
+            checksums=["abc123"],  # only 1, but num_shards=2
+        )
+
+
+def test_manifest_schema_version_roundtrip() -> None:
+    """to_dict/from_dict preserves schema_version=1."""
+    spec = TensorSpec(
+        shape=(4,), dtype="float64", nbytes=32,
+        num_shards=1, shard_size=32, checksums=["deadbeef"],
+    )
+    manifest = CheckpointManifest(
+        checkpoint_id="ckpt-v1",
+        method="test",
+        timestamp=1000.0,
+        total_bytes=32,
+        tensor_specs={"data": spec},
+        metadata={},
+        schema_version=1,
+    )
+    d = manifest.to_dict()
+    assert d["schema_version"] == 1
+    restored = CheckpointManifest.from_dict(d)
+    assert restored.schema_version == 1
+
+
+def test_manifest_schema_version_default_on_old_manifest() -> None:
+    """from_dict returns schema_version=1 when key is absent (old manifest)."""
+    spec = TensorSpec(
+        shape=(4,), dtype="float64", nbytes=32,
+        num_shards=1, shard_size=32, checksums=["deadbeef"],
+    )
+    manifest = CheckpointManifest(
+        checkpoint_id="ckpt-old",
+        method="test",
+        timestamp=1000.0,
+        total_bytes=32,
+        tensor_specs={"data": spec},
+        metadata={},
+    )
+    d = manifest.to_dict()
+    del d["schema_version"]  # simulate old format
+    restored = CheckpointManifest.from_dict(d)
+    assert restored.schema_version == 1

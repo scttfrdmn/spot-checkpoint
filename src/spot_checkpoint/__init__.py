@@ -35,7 +35,7 @@ from spot_checkpoint.protocol import (
 )
 from spot_checkpoint.storage import LocalStore, S3ShardedStore
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"
 
 __all__ = [  # noqa: RUF022  (grouped by category, not alphabetically)
     # Top-level API

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import time
 from datetime import datetime
@@ -25,6 +26,8 @@ from rich.table import Table
 from spot_checkpoint.gc import garbage_collect
 from spot_checkpoint.storage import LocalStore, S3ShardedStore
 
+logger = logging.getLogger(__name__)
+
 app = typer.Typer(
     name="spot-checkpoint",
     help="Manage checkpoints for iterative scientific computations on preemptible instances.",
@@ -32,6 +35,18 @@ app = typer.Typer(
 )
 console = Console()
 err_console = Console(stderr=True)
+
+
+def _env_int_cli(name: str, default: int) -> int:
+    """Read an integer environment variable, logging a warning and falling back on bad input."""
+    val = os.environ.get(name)
+    if val is None:
+        return default
+    try:
+        return int(val)
+    except ValueError:
+        logger.warning("Invalid value for %s=%r; using default %d", name, val, default)
+        return default
 
 
 def _make_store(location: str, job_id: str) -> LocalStore | S3ShardedStore:
@@ -46,8 +61,10 @@ def _make_store(location: str, job_id: str) -> LocalStore | S3ShardedStore:
     """
     if location.startswith("s3://"):
         bucket = location.removeprefix("s3://").rstrip("/")
-        shard_size = int(os.environ.get("SPOT_CHECKPOINT_SHARD_SIZE", str(64 * 1024 * 1024)))
-        max_concurrency = int(os.environ.get("SPOT_CHECKPOINT_MAX_CONCURRENCY", "32"))
+        if not bucket:
+            raise ValueError("S3 location must include a bucket name, e.g. s3://my-bucket")
+        shard_size = _env_int_cli("SPOT_CHECKPOINT_SHARD_SIZE", 64 * 1024 * 1024)
+        max_concurrency = _env_int_cli("SPOT_CHECKPOINT_MAX_CONCURRENCY", 32)
         return S3ShardedStore(
             bucket=bucket,
             job_id=job_id,
@@ -322,6 +339,8 @@ def restore(
     tensor_info = []
     for name, arr in tensors.items():
         npy_path = output_dir / f"{name}.npy"
+        if npy_path.exists():
+            logger.warning("Overwriting existing file: %s", npy_path)
         np.save(str(npy_path), arr)
         tensor_info.append({
             "name": name,
@@ -477,7 +496,7 @@ def bench(
     store: LocalStore | S3ShardedStore
     if location.startswith("s3://"):
         bucket = location.removeprefix("s3://").rstrip("/")
-        shard_size = int(os.environ.get("SPOT_CHECKPOINT_SHARD_SIZE", str(64 * 1024 * 1024)))
+        shard_size = _env_int_cli("SPOT_CHECKPOINT_SHARD_SIZE", 64 * 1024 * 1024)
         store = S3ShardedStore(
             bucket=bucket,
             job_id=job_id,
@@ -501,10 +520,12 @@ def bench(
         await store.load_checkpoint(checkpoint_id)
         read_elapsed = time.perf_counter() - t1
 
-        await store.delete_checkpoint(checkpoint_id)
         return write_elapsed, read_elapsed
 
-    write_elapsed, read_elapsed = asyncio.run(_run_bench())
+    try:
+        write_elapsed, read_elapsed = asyncio.run(_run_bench())
+    finally:
+        asyncio.run(store.delete_checkpoint(checkpoint_id))
     write_mbps = size_mb / write_elapsed
     read_mbps = size_mb / read_elapsed
 

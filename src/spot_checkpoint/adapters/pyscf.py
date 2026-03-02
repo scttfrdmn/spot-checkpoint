@@ -106,6 +106,12 @@ class SCFCheckpointAdapter:
             with tempfile.NamedTemporaryFile(suffix=".chk", delete=False) as tmp:
                 chkfile = tmp.name
             self.mf.chkfile = chkfile
+            import atexit
+
+            def _cleanup_chk(p: str = chkfile) -> None:
+                Path(p).unlink(missing_ok=True)
+
+            atexit.register(_cleanup_chk)
 
         # Flush the current MO state using PySCF's own serialisation
         dump_scf(
@@ -116,7 +122,7 @@ class SCFCheckpointAdapter:
         chk_bytes = np.frombuffer(Path(chkfile).read_bytes(), dtype=np.uint8)
 
         metadata: dict[str, Any] = {
-            "e_tot": float(self.mf.e_tot) if self.mf.e_tot else None,
+            "e_tot": float(self.mf.e_tot) if self.mf.e_tot is not None else None,
             "converged": bool(self.mf.converged) if hasattr(self.mf, "converged") else None,
             "method": "scf",
         }
@@ -134,6 +140,12 @@ class SCFCheckpointAdapter:
         with tempfile.NamedTemporaryFile(suffix=".chk", delete=False) as tmp:
             tmp.write(payload.tensors["chkfile"].tobytes())
             chkfile_path = tmp.name
+        import atexit
+
+        def _cleanup_restore(p: str = chkfile_path) -> None:
+            Path(p).unlink(missing_ok=True)
+
+        atexit.register(_cleanup_restore)
         self.mf.chkfile = chkfile_path
         self.mf.init_guess = "chkfile"
         logger.info(
@@ -177,7 +189,7 @@ class CCSDCheckpointAdapter:
         }
 
         metadata: dict[str, Any] = {
-            "e_corr": float(self.mycc.e_corr) if self.mycc.e_corr else None,
+            "e_corr": float(self.mycc.e_corr) if self.mycc.e_corr is not None else None,
             "converged": bool(self.mycc.converged) if hasattr(self.mycc, "converged") else None,
             "method": "ccsd",
         }
@@ -238,8 +250,12 @@ class CASSCFCheckpointAdapter:
         }
 
         metadata: dict[str, Any] = {
-            "e_tot": float(self.mc.e_tot) if self.mc.e_tot else None,
-            "e_cas": float(self.mc.e_cas) if hasattr(self.mc, "e_cas") and self.mc.e_cas else None,
+            "e_tot": float(self.mc.e_tot) if self.mc.e_tot is not None else None,
+            "e_cas": (
+                float(self.mc.e_cas)
+                if hasattr(self.mc, "e_cas") and self.mc.e_cas is not None
+                else None
+            ),
             "ncas": self.mc.ncas,
             "nelecas": self.mc.nelecas,
             "method": "casscf",

@@ -235,3 +235,54 @@ class TestBenchCommand:
         assert "write_elapsed_s" in data
         assert "read_elapsed_s" in data
         assert "concurrency" in data
+
+
+class TestMakeStore:
+    def test_make_store_empty_bucket_raises(self) -> None:
+        """_make_store('s3://', 'job') raises ValueError for empty bucket."""
+        from spot_checkpoint.cli import _make_store
+
+        with pytest.raises(ValueError, match="bucket name"):
+            _make_store("s3://", "job")
+
+    def test_env_var_invalid_int_falls_back(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Invalid SPOT_CHECKPOINT_SHARD_SIZE falls back to default, no exception."""
+        from spot_checkpoint.cli import _make_store
+
+        monkeypatch.setenv("SPOT_CHECKPOINT_SHARD_SIZE", "abc")
+        # Should not raise; returns an S3ShardedStore with default shard_size
+        # We patch S3ShardedStore to avoid real AWS calls
+        from unittest.mock import MagicMock, patch
+
+        mock_store = MagicMock()
+        with patch("spot_checkpoint.cli.S3ShardedStore", return_value=mock_store) as mock_cls:
+            store = _make_store("s3://my-bucket", "job")
+        # Verify it was called with an integer shard_size (the default)
+        _, kwargs = mock_cls.call_args
+        assert isinstance(kwargs["shard_size"], int)
+
+
+class TestRestoreCommandOverwrite:
+    def test_restore_warns_on_overwrite(
+        self, populated_store: tuple[Path, str], tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """restore command logs a warning when an .npy file already exists."""
+        import logging
+
+        path, job_id = populated_store
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        # Pre-create the output file to trigger overwrite warning
+        (output_dir / "state.npy").write_bytes(b"old")
+
+        with caplog.at_level(logging.WARNING, logger="spot_checkpoint.cli"):
+            result = runner.invoke(
+                app,
+                ["restore", str(path), job_id, "--output", str(output_dir)],
+            )
+
+        assert result.exit_code == 0
+        assert any("Overwriting" in r.message for r in caplog.records)

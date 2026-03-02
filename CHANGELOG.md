@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-03-02
+
+### Fixed
+- **adapters/pyscf.py**: Falsy-check on energy values replaced with `is not None` in
+  `SCFCheckpointAdapter`, `CCSDCheckpointAdapter`, and `CASSCFCheckpointAdapter` — energy
+  values of exactly `0.0` are now stored correctly instead of as `None` (closes #40)
+- **adapters/pyscf.py**: Temp chkfile created by `SCFCheckpointAdapter.checkpoint_state()`
+  and `restore_state()` is now registered with `atexit` for cleanup on process exit (closes #50)
+- **gc.py**: `garbage_collect()` no longer aborts on first deletion failure — each deletion
+  is wrapped in `try/except/continue`; failed IDs are returned in `result["errors"]`.
+  Added `ValueError` guard for `keep < 0` (closes #41)
+- **lifecycle.py**: `SlurmLifecycleBackend.request_requeue()` now uses `subprocess.run()`
+  instead of `os.system()`; logs an error if `scontrol requeue` returns non-zero (closes #42)
+- **lifecycle.py**: `SpotLifecycleManager._run_async()` raises `RuntimeError` instead of
+  `AssertionError` when called before `start()` or after `stop()` (closes #43)
+- **cli.py**: `_make_store()` raises `ValueError` on empty S3 bucket name (`s3://`) (closes #48)
+- **cli.py**: `int(os.environ.get(...))` calls replaced with `_env_int_cli()` helper that
+  logs a warning and falls back to the default on invalid input (closes #46)
+- **cli.py**: `restore` command logs a `WARNING` when overwriting an existing `.npy` file (closes #47)
+- **cli.py**: `bench` command now deletes the benchmark checkpoint artifact in a `finally`
+  block so cleanup runs even if read/write raises (closes #45)
+
+### Added
+- **protocol.py**: `CheckpointManifest` gains `schema_version: int = 1` field; included in
+  `to_dict()` output and read back in `from_dict()` with default `1` for old manifests (closes #51)
+- **protocol.py**: `TensorSpec.__post_init__()` validates `num_shards >= 1` and
+  `len(checksums) == num_shards` at construction time (closes #49)
+- **lifecycle.py**: job_id fallback now includes hostname —
+  `f"pyscf-{socket.gethostname()}-{os.getpid()}"` — reducing collision risk on shared
+  systems (closes #44)
+- **lifecycle.py**: Clarifying inline comment on IMDSv2 token expiry logic in
+  `DirectEC2Backend._maybe_refresh_token()`
+- **lifecycle.py**: `spot_safe_async()` docstring updated to clarify the function is
+  `async` for caller compatibility, not because it performs async I/O (closes #52)
+- **gc.py**: `garbage_collect()` return dict now always includes `"errors": []` key for
+  consistency across both the keep and no-keep paths
+- 15 new tests: `test_gc.py` (2), `test_lifecycle.py` (2), `test_direct_ec2_backend.py` (1),
+  `test_cli.py` (3), `test_adapters_pyscf.py` (3), `test_storage.py` (4)
+
+### Changed
+- `pyproject.toml`: version bumped to `0.9.0`
+- `__init__.py`: `__version__` updated to `"0.9.0"`
+
 ## [0.8.0] - 2026-03-01
 
 ### Added

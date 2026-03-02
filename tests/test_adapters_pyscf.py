@@ -450,3 +450,85 @@ class TestCASSCFExternalSolver:
         )
         estimate = self.adapter.checkpoint_size_estimate
         assert estimate >= raw_size
+
+
+# ---------------------------------------------------------------------------
+# v0.9.0: Zero energy values stored correctly (Issue A)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.integration
+class TestEnergyZeroMetadata:
+    """Verify that energy values of 0.0 are stored as 0.0, not None."""
+
+    def test_scf_e_tot_zero_stored_correctly(self):
+        """SCF adapter stores e_tot=0.0 correctly (not None)."""
+        import types
+        import numpy as np
+        from spot_checkpoint.adapters.pyscf import SCFCheckpointAdapter
+
+        mol = types.SimpleNamespace()
+        mf = types.SimpleNamespace(
+            mo_coeff=np.eye(2),
+            mo_energy=np.array([0.0, 1.0]),
+            mo_occ=np.array([2.0, 0.0]),
+            e_tot=0.0,
+            converged=True,
+            chkfile=None,
+            mol=mol,
+            _iter=1,
+        )
+
+        adapter = SCFCheckpointAdapter.__new__(SCFCheckpointAdapter)
+        adapter.mf = mf
+
+        # Patch dump_scf and chkfile I/O
+        import tempfile, os
+        with tempfile.NamedTemporaryFile(suffix=".chk", delete=False) as f:
+            f.write(b"\x00" * 8)
+            chkfile = f.name
+
+        mf.chkfile = chkfile
+        try:
+            import unittest.mock as mock
+            with mock.patch("pyscf.scf.chkfile.dump_scf"):
+                payload = adapter.checkpoint_state()
+            assert payload.metadata["e_tot"] == 0.0
+        finally:
+            os.unlink(chkfile)
+
+    def test_ccsd_e_corr_zero_stored_correctly(self):
+        """CCSD adapter stores e_corr=0.0 correctly (not None)."""
+        import types
+        import numpy as np
+        from spot_checkpoint.adapters.pyscf import CCSDCheckpointAdapter
+
+        mycc = types.SimpleNamespace(
+            t1=np.zeros((2, 3)),
+            t2=np.zeros((2, 2, 3, 3)),
+            e_corr=0.0,
+            converged=True,
+        )
+
+        adapter = CCSDCheckpointAdapter(mycc)
+        payload = adapter.checkpoint_state()
+        assert payload.metadata["e_corr"] == 0.0
+
+    def test_casscf_e_cas_zero_stored_correctly(self):
+        """CASSCF adapter stores e_cas=0.0 correctly (not None)."""
+        import types
+        import numpy as np
+        from spot_checkpoint.adapters.pyscf import CASSCFCheckpointAdapter
+
+        mc = types.SimpleNamespace(
+            mo_coeff=np.eye(4),
+            e_tot=0.0,
+            e_cas=0.0,
+            ncas=2,
+            nelecas=(1, 1),
+            ci=np.zeros((2, 2)),
+        )
+
+        adapter = CASSCFCheckpointAdapter(mc)
+        payload = adapter.checkpoint_state()
+        assert payload.metadata["e_tot"] == 0.0
+        assert payload.metadata["e_cas"] == 0.0

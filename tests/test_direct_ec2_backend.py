@@ -217,3 +217,22 @@ class TestPollLoopInterruptDetection:
             backend.stop()
 
         assert len(events) == 0
+
+    def test_malformed_json_does_not_crash(self):
+        """Malformed JSON response from metadata endpoint does not raise; no events fired."""
+        backend = DirectEC2Backend(poll_interval=0.05, interrupt_headroom=0)
+
+        token_resp = _MockResponse(200, _TOKEN)
+        bad_json_resp = _MockResponse(200, b"not-json")
+        no_interrupt_resp = _MockResponse(404, "")
+
+        events: list[InterruptEvent] = []
+        with patch("urllib.request.urlopen", side_effect=[
+            token_resp, bad_json_resp, no_interrupt_resp,
+        ] + [no_interrupt_resp] * 20):
+            backend.start(on_interrupt=events.append)
+            import time as _time
+            _time.sleep(0.3)
+            backend.stop()
+
+        assert len(events) == 0

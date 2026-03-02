@@ -414,3 +414,60 @@ class TestTopLevelAPIWithLocalStore:
                 adapter_class=mock_adapter_class,
             )
         assert callable(cb)
+
+
+# ---------------------------------------------------------------------------
+# New v0.9.0 tests
+# ---------------------------------------------------------------------------
+
+
+class TestRunAsyncRaisesBeforeStart:
+    def test_run_async_raises_before_start(self, tmp_path: Path, fake_adapter: Any) -> None:
+        """_run_async raises RuntimeError when called before start()."""
+        store = LocalStore(base_dir=tmp_path, job_id="run-async-test")
+        mgr = SpotLifecycleManager(
+            store=store,
+            adapter=fake_adapter,
+            backend=_NoOpBackend(),
+        )
+
+        async def _noop() -> None:
+            pass
+
+        coro = _noop()
+        try:
+            with pytest.raises(RuntimeError, match="_run_async called before start"):
+                mgr._run_async(coro)
+        finally:
+            coro.close()  # prevent "coroutine was never awaited" warning
+
+
+class TestJobIdFallbackIncludesHostname:
+    def test_job_id_fallback_includes_hostname(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When no SLURM_JOB_ID/SPAWN_INSTANCE_ID, job_id includes hostname."""
+        import socket
+
+        monkeypatch.delenv("SLURM_JOB_ID", raising=False)
+        monkeypatch.delenv("SPAWN_INSTANCE_ID", raising=False)
+
+        captured: dict[str, str] = {}
+
+        mock_store = MagicMock()
+
+        def _capture_store(**kwargs: Any) -> MagicMock:
+            captured["job_id"] = kwargs.get("job_id", "")
+            return mock_store
+
+        mock_adapter_class = MagicMock()
+        mock_adapter_class.return_value = MagicMock()
+
+        with patch("spot_checkpoint.storage.S3ShardedStore", side_effect=_capture_store):
+            spot_safe(
+                MagicMock(),
+                bucket="test-bucket",
+                adapter_class=mock_adapter_class,
+            )
+
+        assert socket.gethostname() in captured["job_id"]

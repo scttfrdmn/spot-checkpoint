@@ -192,6 +192,7 @@ class CheckpointManifest:
     tensor_specs: dict[str, TensorSpec]
     metadata: dict[str, Any]
     compression: str | None = None  # "zstd" | None
+    schema_version: int = 1
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to JSON-compatible dict."""
@@ -204,6 +205,7 @@ class CheckpointManifest:
                 name: spec.to_dict() for name, spec in self.tensor_specs.items()
             },
             "metadata": self.metadata,
+            "schema_version": self.schema_version,
         }
         if self.compression is not None:
             d["compression"] = self.compression
@@ -223,6 +225,7 @@ class CheckpointManifest:
             },
             metadata=data["metadata"],
             compression=data.get("compression"),
+            schema_version=data.get("schema_version", 1),
         )
 
 
@@ -236,6 +239,14 @@ class TensorSpec:
     num_shards: int
     shard_size: int
     checksums: list[str]  # xxhash per shard
+
+    def __post_init__(self) -> None:
+        if self.num_shards < 1:
+            raise ValueError(f"num_shards must be >= 1, got {self.num_shards}")
+        if len(self.checksums) != self.num_shards:
+            raise ValueError(
+                f"checksums length {len(self.checksums)} != num_shards {self.num_shards}"
+            )
 
     def to_dict(self) -> dict[str, Any]:
         return {
