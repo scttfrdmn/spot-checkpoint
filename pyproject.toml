@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "spot-checkpoint"
-version = "0.11.0"
+version = "0.12.0"
 description = "Checkpoint/restart for iterative scientific computations on preemptible cloud instances"
 readme = "README.md"
 license = "Apache-2.0"

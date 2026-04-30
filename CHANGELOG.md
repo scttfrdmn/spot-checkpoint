@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-03-04
+
+### Added
+- **infra/smoke_stack.py**: `_benchmark_script_numpy_dict()` — gradient descent on
+  quadratic f(x) = ½xᵀAx − bᵀx (n=5000), 200 iterations × 0.5 s = ~100 s total;
+  validates `NumpyDictAdapter` end-to-end under FIS interruption (closes #69)
+- **infra/smoke_stack.py**: `_benchmark_script_scipy_opt()` — L-BFGS-B on extended
+  Rosenbrock (n=1000), sliced into maxiter=50 sub-calls; validates
+  `ScipyOptimizeAdapter` (closes #70)
+- **infra/smoke_stack.py**: `_benchmark_script_scipy_sparse()` — CG on n=20000
+  tridiagonal SPD system; validates `ScipySparseLinalgAdapter` (closes #71)
+- **infra/smoke_stack.py**: `_benchmark_script_torch()` — 3-layer MLP (64→128→64→1),
+  Adam, 2000 steps × 0.1 s = 200 s on CPU-only torch; validates
+  `PyTorchTrainingAdapter` (closes #72)
+- **infra/smoke_stack.py**: `_benchmark_script_openmm()` — 512-particle LJ argon
+  fluid, Langevin NVT, 2000 blocks × 100 steps; topology built programmatically
+  (no external PDB); validates `OpenMMAdapter` (closes #73)
+- **infra/smoke_stack.py**: `SpotCheckpointSmokeStack._make_lt()` helper — parameterized
+  launch template factory; 5 new launch templates (`LaunchTemplateNumpyDict`,
+  `LaunchTemplateScipyOpt`, `LaunchTemplateScipySparse`, `LaunchTemplateTorch`,
+  `LaunchTemplateOpenMM`) with corresponding `CfnOutput` entries; wheel updated to
+  0.11.0 (closes #74)
+- **infra/run_smoke.py**: `_run_adapter_smoke()` helper — extracted 10-step smoke
+  scenario from flat `main()`, parameterized on `job_id`, `template_id`, and
+  `tag_poll_seconds` (closes #75)
+- **infra/run_smoke.py**: `--adapter {fake-solver,numpy-dict,scipy-opt,scipy-sparse,
+  torch,openmm,all}` CLI parameter; per-adapter `--template-id-*` flags;
+  `--adapter all` runs all adapters in sequence and prints a summary table;
+  backward-compatible (`--adapter fake-solver` is the default) (closes #75)
+
+### Changed
+- `pyproject.toml` + `__init__.py`: version bumped to `0.12.0` (closes #76)
+
 ## [0.11.0] - 2026-03-01
 
 ### Added
